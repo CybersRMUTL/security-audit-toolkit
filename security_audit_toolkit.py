@@ -4609,6 +4609,14 @@ def _build_pdf(data, charts, output_path, font):
     def P(t, s=None):
         return Paragraph(str(t), s or body)
 
+    # ── ตัวนับบทอัตโนมัติ (ไม่พังเมื่อบางบทถูกข้ามในโหมดโฮสต์เดี่ยว) ──
+    _chap = {"n": 0}
+    def H1(t):
+        _chap["n"] += 1
+        return P(f"บทที่ {_chap['n']} · {t}", h1)
+    def H1A(t):
+        return P(f"ภาคผนวก · {t}", h1)
+
     # ── ตัววาดกราฟแท่งด้วย ReportLab เอง (ไม่ต้องพึ่ง matplotlib) ──
     def native_bars(items, total_w=15.4, label_w=3.6, val_w=1.4, title=None):
         bar_w = total_w - label_w - val_w
@@ -4752,7 +4760,7 @@ def _build_pdf(data, charts, output_path, font):
     story.append(PageBreak())
 
     # ═══ 2. EXECUTIVE SUMMARY ═══
-    story.append(P("บทสรุปผู้บริหาร", h1))
+    story.append(H1("บทสรุปผู้บริหาร"))
 
     # ── ระดับภัยคุกคามองค์กร (org-level threat: worst single host = org level) ──
     _org_lvl = s.get("risk_level", "unknown")
@@ -4893,8 +4901,58 @@ def _build_pdf(data, charts, output_path, font):
     story.append(Spacer(1, 0.5 * cm))
     story.append(PageBreak())
 
+    # ═══ 2. METHODOLOGY & SCOPE ═══
+    story.append(H1("ระเบียบวิธีและขอบเขตการตรวจสอบ"))
+    story.append(P("ส่วนนี้อธิบายว่าการตรวจสอบครั้งนี้ทำกับอะไร ด้วยวิธีใด และผลลัพธ์ควรถูกตีความอย่างไร "
+                   "เพื่อให้ผู้บริหารและผู้ปฏิบัติงานเข้าใจขอบเขตและข้อจำกัดของรายงานตรงกัน", body))
+    story.append(Spacer(1, 0.3 * cm))
+
+    story.append(P("2.1 ขอบเขตการตรวจสอบ (Scope)", h2))
+    _ndistinct = len(set((r.get("cve") or "?") for r in data.get("all_results", [])))
+    scope_tbl = [
+        ["เป้าหมาย (Target)", data["target"]],
+        ["ประเภทการสแกน", scope],
+        ["วันที่ตรวจสอบ", data["scan_date"][:19].replace("T", " ")],
+        ["จำนวนเป้าหมาย", f"{s['hosts_total']} รายการ (เข้าถึงได้ {s['hosts_reachable']} · เข้าไม่ถึง {s['hosts_unreachable']})"],
+        ["หัวข้อช่องโหว่ที่ตรวจ", f"{_ndistinct} หัวข้อ CVE ครอบคลุมเทคโนโลยี PHP · NGINX · Node.js · GitLab"],
+        ["เครื่องมือที่ใช้", f"RMUT CERT Security Audit Toolkit v{VERSION}"],
+    ]
+    _mt = Table([[P(a, cellb), P(b, cell)] for a, b in scope_tbl], colWidths=[5 * cm, 11 * cm])
+    _mt.setStyle(TableStyle([("BACKGROUND", (0, 0), (0, -1), RMUT_LIGHT), ("TEXTCOLOR", (0, 0), (0, -1), RMUT_BLUE),
+                             ("LINEBELOW", (0, 0), (-1, -1), 0.4, colors.HexColor("#d6d9e6")),
+                             ("TOPPADDING", (0, 0), (-1, -1), 6), ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+                             ("LEFTPADDING", (0, 0), (-1, -1), 10)]))
+    story.append(_mt)
+    story.append(Spacer(1, 0.35 * cm))
+
+    story.append(P("2.2 วิธีการตรวจสอบ (Methodology)", h2))
+    story.append(P("• <b>ตรวจจากภายนอกแบบไม่รบกวนระบบ (External, non-intrusive)</b> — ระบุชนิดและเวอร์ชันของเว็บเซิร์ฟเวอร์/ภาษา "
+                   "แล้วเทียบกับฐานข้อมูลช่องโหว่ที่ทราบ โดยไม่กระทบการให้บริการ", body))
+    story.append(P("• <b>ยืนยันช่องโหว่ (RCE Verification) เมื่อจำเป็น</b> — ทดสอบพิสูจน์แบบปลอดภัย พร้อมเก็บหลักฐานตามหลัก chain-of-custody", body))
+    story.append(P("• <b>ตรวจการตั้งค่าพื้นฐาน</b> — Security Headers, คุกกี้ความปลอดภัย และใบรับรอง TLS", body))
+    story.append(Spacer(1, 0.3 * cm))
+
+    story.append(P("2.3 เกณฑ์การประเมินความเสี่ยง", h2))
+    story.append(P("ใช้มาตรฐานสากล <b>CVSS v3.1 (0.0–10.0)</b> ถ่วงน้ำหนักด้วยความแน่นอนของสถานะ "
+                   "(ยืนยันเสี่ยง = เต็ม · พบสัญญาณ = ครึ่ง · ยังสรุปไม่ได้/ปลอดภัย = ไม่นับ) แล้วแปลงเป็นดัชนี 0–100. "
+                   "<b>ระดับภัยคุกคามระดับองค์กรกำหนดจากโฮสต์ที่เสี่ยงสูงสุด — แม้เพียงเครื่องเดียวก็ถือว่าทั้งองค์กรเสี่ยง</b>", body))
+    story.append(Spacer(1, 0.3 * cm))
+
+    story.append(P("2.4 หน่วยการนับผลลัพธ์ (สำคัญต่อการอ่านตัวเลข)", h2))
+    story.append(P("รายงานนี้นับผลลัพธ์ <b>2 หน่วย</b> และตัวเลขในทุกไฟล์ (PDF / HTML / Excel / CSV) อ้างอิงชุดข้อมูลเดียวกัน:", body))
+    story.append(P("• <b>รายเครื่อง (โฮสต์)</b> — จัดระดับความเสี่ยงของแต่ละเครื่อง ผลรวมเท่ากับจำนวนโฮสต์ทั้งหมด", body))
+    story.append(P("• <b>รายหัวข้อ CVE (รายการตรวจ)</b> — หนึ่งเครื่องตรวจหลายหัวข้อ ตัวเลขจึงมากกว่าจำนวนเครื่องเสมอ", body))
+    story.append(Spacer(1, 0.3 * cm))
+
+    story.append(P("2.5 ข้อจำกัดของการตรวจสอบ (Limitations)", h2))
+    story.append(P("• ตรวจจากภายนอกเท่านั้น — ช่องโหว่ที่ต้องยืนยันการตั้งค่าภายในเครื่องจะถูกจัดเป็น 'ยังไม่ทราบ' จนกว่าจะตรวจบนเครื่องจริง", body))
+    story.append(P("• เซิร์ฟเวอร์ที่ซ่อนหมายเลขเวอร์ชันจะตรวจจากภายนอกไม่ได้ (ถือเป็นการตั้งค่าที่ดีด้านความปลอดภัย)", body))
+    story.append(P("• ผลลัพธ์เป็นภาพ ณ เวลาที่สแกน ควรสแกนซ้ำเป็นระยะและหลังการแก้ไขทุกครั้ง", body))
+    story.append(Spacer(1, 0.5 * cm))
+    story.append(PageBreak())
+
     # ═══ 3. DASHBOARD ═══
-    story.append(P("แดชบอร์ดสถิติ", h1))
+    story.append(H1("ผลการตรวจโดยรวม"))
     if s["total"] == 0 and s["hosts_reachable"] == 0:
         warnbox = st("WB", fontSize=11, leading=16, textColor=colors.HexColor("#8a6d00"))
         nb = Table([[P("ไม่พบโฮสต์ที่เข้าถึงได้จากการสแกนนี้ จึงไม่มีข้อมูลช่องโหว่ให้แสดงกราฟ<br/>"
@@ -5140,7 +5198,7 @@ def _build_pdf(data, charts, output_path, font):
 
     # ═══ 4. PER-HOST SUMMARY (multi only) ═══
     if multi:
-        story.append(P("สรุปผลรายเว็บไซต์/โฮสต์", h1))
+        story.append(H1("สรุปผลรายเว็บไซต์/โฮสต์"))
         story.append(P("ตารางนี้แสดงภาพรวมของแต่ละเว็บไซต์ที่สแกน เรียงจากอันตรายมากที่สุดไปน้อยที่สุด "
                        "คอลัมน์ 'เสี่ยง' = จำนวนช่องโหว่ที่ยืนยันแล้ว (ต้องแก้ด่วน) · "
                        "'เตือน' = จำนวนสัญญาณเสี่ยงที่ต้องตรวจเพิ่ม · "
@@ -5219,7 +5277,7 @@ def _build_pdf(data, charts, output_path, font):
                              -len(d["hosts"])))
         no_ip_count = sum(1 for _h in data["hosts"] if not _h.get("ip"))
 
-        story.append(P("รายงาน IP Address", h1))
+        story.append(H1("รายงาน IP Address"))
         story.append(P(
             f"ตารางนี้แสดงภาพรวมของ IP Address ที่ใช้งานโดยโฮสต์ทั้งหมดในการสแกนครั้งนี้ "
             f"โฮสต์หลายรายอาจใช้ IP เดียวกัน (Virtual Hosting) — "
@@ -5292,7 +5350,7 @@ def _build_pdf(data, charts, output_path, font):
         story.append(PageBreak())
 
         # ═══ 4a. CVE COVERAGE MATRIX (โฮสต์ × CVE) ═══
-        story.append(P("ตารางภาพรวม: โฮสต์ × ช่องโหว่ (CVE)", h1))
+        story.append(H1("ตารางภาพรวม: โฮสต์ × ช่องโหว่ (CVE)"))
         story.append(P("ตารางนี้ให้เห็นภาพรวมว่าโฮสต์ไหนมีช่องโหว่อะไรบ้างในคราวเดียว "
                        "แถวแนวนอน = แต่ละเว็บไซต์/โฮสต์ · คอลัมน์แนวตั้ง = แต่ละช่องโหว่ที่ตรวจ "
                        "มองสีเป็นหลัก: "
@@ -5414,7 +5472,7 @@ def _build_pdf(data, charts, output_path, font):
             # เรียงกลุ่มตามคะแนนสูงสุดของสมาชิก แล้วตามจำนวนสมาชิก
             grouped = sorted(groups.values(),
                              key=lambda hs_: (-max(x["risk_score"] for x in hs_), -len(hs_)))
-            story.append(P("รายละเอียดช่องโหว่รายโฮสต์ (จัดกลุ่มตามรูปแบบที่พบ)", h1))
+            story.append(H1("รายละเอียดช่องโหว่รายโฮสต์ (จัดกลุ่มตามรูปแบบที่พบ)"))
             story.append(P("โฮสต์ที่พบช่องโหว่ชุดเดียวกันถูกจัดเป็นกลุ่มเดียว เพื่อให้อ่านง่ายและไม่ซ้ำซ้อน "
                            f"(ทั้งหมด {len(risky_all)} โฮสต์ที่มีความเสี่ยง · {len(grouped)} รูปแบบ)", note))
             story.append(Spacer(1, 0.15 * cm))
@@ -5470,7 +5528,7 @@ def _build_pdf(data, charts, output_path, font):
 
     # ═══ 4c. SECURITY POSTURE: HTTP Headers / Cookie / Banner (A1/A2/A4) ═══
     if multi and s.get("hdr_hosts"):
-        story.append(P("การตั้งค่าความปลอดภัยพื้นฐานของเว็บไซต์", h1))
+        story.append(H1("การตั้งค่าความปลอดภัยพื้นฐานของเว็บไซต์"))
         story.append(P("เว็บเซิร์ฟเวอร์ทุกตัวสามารถตั้งค่า 'ป้ายกำกับความปลอดภัย' (Security Headers) เพื่อบอกเบราว์เซอร์ว่าต้องป้องกันผู้ใช้อย่างไร "
                        "ถ้าขาดป้ายเหล่านี้ เบราว์เซอร์จะไม่รู้ว่าต้องป้องกัน ทำให้แฮกเกอร์อาจหลอกให้ผู้ใช้คลิกลิงก์อันตราย "
                        "หรือขโมย Cookie (ข้อมูลล็อกอิน) ได้ — "
@@ -5501,7 +5559,7 @@ def _build_pdf(data, charts, output_path, font):
         story.append(PageBreak())
 
     # ═══ 5. DETAILED FINDINGS (flat table) ═══
-    story.append(P("รายละเอียดผลการตรวจสอบช่องโหว่", h1))
+    story.append(H1("รายละเอียดผลการตรวจสอบช่องโหว่"))
     story.append(P(f"ตรวจพบช่องโหว่/สัญญาณเสี่ยงจริง <b>{s.get('detected', s['vulnerable'] + s['warning'])}</b> รายการ "
                    f"(จากรายการที่ใช้สแกนทั้งหมด {s['total']} รายการ) — เรียงรายการที่เสี่ยงสูงสุดไว้ก่อน "
                    "สีแดง = ยืนยันแล้วว่ามีช่องโหว่ (ต้องแก้ไขด่วน) · "
@@ -5568,7 +5626,7 @@ def _build_pdf(data, charts, output_path, font):
     story.append(PageBreak())
 
     # ═══ 6. RECOMMENDATIONS ═══
-    story.append(P("คำแนะนำและขั้นตอนถัดไป", h1))
+    story.append(H1("คำแนะนำและขั้นตอนถัดไป"))
     if s["vulnerable"] > 0:
         story.append(P("ลำดับความสำคัญสูงสุด (ทำทันที)", h2))
         for i, item in enumerate([
@@ -5676,7 +5734,7 @@ def _build_pdf(data, charts, output_path, font):
 
     # ═══ 7. APPENDIX ═══
     story.append(PageBreak())
-    story.append(P("ภาคผนวก: ข้อมูลอ้างอิงทางเทคนิค", h1))
+    story.append(H1A("ข้อมูลอ้างอิงทางเทคนิค"))
     story.append(P("ส่วนนี้รวบรวมข้อมูลเชิงเทคนิคสำหรับผู้ดูแลระบบและผู้ตรวจสอบ "
                    "ผู้บริหารสามารถข้ามไปหน้าถัดไปได้", note))
     story.append(Spacer(1, 0.15 * cm))
