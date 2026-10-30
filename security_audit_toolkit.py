@@ -19,7 +19,7 @@ Menu & Outputs:
 Auto-rename: ทุก output มี timestamp + counter → ไม่ทับไฟล์เก่า
 
 Dependencies:
-    pip install requests reportlab matplotlib dnspython
+    pip install requests reportlab matplotlib dnspython openpyxl
 
 Usage:
     python3 security_audit_toolkit.py
