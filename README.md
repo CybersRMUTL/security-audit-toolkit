@@ -33,7 +33,6 @@
 - [ติดตั้ง (ทำครั้งเดียว)](#-ติดตั้ง-ทำครั้งเดียว)
 - [เริ่มใช้งาน](#-เริ่มใช้งาน)
 - [หน้าต่างเมนูโต้ตอบ (Interactive Menu)](#-หน้าต่างเมนูโต้ตอบ-interactive-menu)
-- [คำสั่งที่ใช้บ่อย](#-คำสั่งที่ใช้บ่อย)
 - [ไฟล์ผลลัพธ์ที่ได้](#-ไฟล์ผลลัพธ์ที่ได้)
 - [แฟ้มหลักฐานและเอกสารรายงาน](#-แฟ้มหลักฐานและเอกสารรายงาน)
 - [การให้คะแนนความเสี่ยง](#-การให้คะแนนความเสี่ยง)
@@ -172,21 +171,6 @@ python3 security_audit_toolkit.py
 - สร้างรายงาน PDF, CSV และ HTML อัตโนมัติ
 
 เหมาะสำหรับการตรวจประเมินความปลอดภัยของระบบตามรอบ (Periodic Security Audit)
-
-## 🔧 คำสั่งที่ใช้บ่อย
-
-| อยากทำอะไร | พิมพ์คำสั่ง |
-|-----------|-----------|
-| เปิดเมนูโต้ตอบ | `python3 security_audit_toolkit.py` |
-| ดู 13 CVE ที่ตรวจ | `python3 security_audit_toolkit.py --list-cves` |
-| สแกนโฮสต์เดียว | `python3 security_audit_toolkit.py --target 192.168.1.10` |
-| สแกนช่วง IP (CIDR) | `python3 security_audit_toolkit.py --cidr 192.168.1.0/24` |
-| ค้นหา + สแกนซับโดเมน | `python3 security_audit_toolkit.py --wildcard example.org` |
-| สแกนจากไฟล์รายชื่อโฮสต์ | `python3 security_audit_toolkit.py --list hosts.csv` |
-| ครบวงจร (สแกน+ยืนยัน+รายงาน) | `python3 security_audit_toolkit.py --pipeline 192.168.1.10 --i-own-this-target` |
-| ออกรายงานจากไฟล์ผลสแกน | `python3 security_audit_toolkit.py --report scan.json` |
-
-> ถ้าติดตั้งด้วย `pip` แล้ว ใช้ `security-audit` แทน `python3 security_audit_toolkit.py` ได้ทุกคำสั่ง
 
 ## 📂 ไฟล์ผลลัพธ์ที่ได้
 
