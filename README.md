@@ -76,9 +76,8 @@
 git clone https://github.com/CybersRMUTL/security-audit-toolkit.git
 cd security-audit-toolkit
 
-# 2) ติดตั้งไลบรารีที่ต้องใช้
+# 2) ติดตั้งไลบรารีที่ต้องใช้ (ครบทุกตัวในคำสั่งเดียว)
 pip install -r requirements.txt
-pip install requests reportlab matplotlib dnspython openpyxl
 ```
 
 > อยากใช้เป็นคำสั่งลัดชื่อ `security-audit` ? ติดตั้งแบบนี้แทน:
