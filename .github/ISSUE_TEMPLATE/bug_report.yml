@@ -1,0 +1,45 @@
+name: 🐛 Bug report
+description: Report a problem with the toolkit
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a report. **Do not paste real scan results, evidence, target hostnames, or API keys.** Redact anything sensitive.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: The exact command(s) you ran (with sensitive values redacted).
+      placeholder: |
+        1. python3 security_audit_toolkit.py --target <REDACTED>
+        2. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Toolkit version
+      placeholder: "6.3.0"
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Python version & OS
+      placeholder: "Python 3.11, macOS 15"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant output / traceback
+      description: Paste the error. Redact hostnames, IPs, and keys.
+      render: shell

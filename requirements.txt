@@ -1,0 +1,7 @@
+# Core (required)
+requests>=2.28
+
+# Optional — enable extra features (the tool degrades gracefully without them)
+dnspython>=2.3        # wildcard / subdomain DNS enumeration
+reportlab>=4.0        # PDF report generation
+matplotlib>=3.6       # chart rendering in reports

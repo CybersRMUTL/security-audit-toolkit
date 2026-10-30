@@ -1,0 +1,65 @@
+# ───────────────────────────────────────────────────────────────
+# SENSITIVE OUTPUT — never commit real scan data / evidence / targets
+# ───────────────────────────────────────────────────────────────
+# Scan & pipeline results
+scan_*.json
+pipeline_*.json
+report_*.json
+*_results.json
+
+# Evidence (chain-of-custody artifacts: transcripts, proofs, metadata)
+evidence/
+**/evidence/
+
+# Generated reports (PDF / CSV / charts)
+reports/
+*.pdf
+
+# Target / host lists (real infrastructure — keep private)
+*hosts*.txt
+*hosts*.csv
+*_hosts_*.json
+dns.txt
+websites.csv
+report_results.csv
+targets.txt
+targets.csv
+
+# Local config with API keys (c99, SecurityTrails, etc.)
+.env
+*.env
+config.local.*
+secrets.*
+
+# ───────────────────────────────────────────────────────────────
+# Python
+# ───────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+ENV/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ───────────────────────────────────────────────────────────────
+# OS / Editor
+# ───────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.idea/
+.vscode/
+*.log

@@ -1,0 +1,25 @@
+name: 💡 Feature request
+description: Suggest an improvement or a new CVE check
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What are you trying to do that the tool doesn't support yet?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the feature or CVE check you'd like.
+    validations:
+      required: true
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope confirmation
+      options:
+        - label: This request keeps the tool within defensive / authorized-testing scope.
+          required: true

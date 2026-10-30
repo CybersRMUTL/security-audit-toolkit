@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "security-audit-toolkit"
+version = "6.3.0"
+description = "All-in-One authorized vulnerability scanner, RCE verifier, and report generator for CERT teams."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "RMUT CERT" }]
+keywords = ["security", "cert", "vulnerability-scanner", "cve", "dfir", "incident-response"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Security",
+]
+dependencies = [
+    "requests>=2.28",
+]
+
+[project.optional-dependencies]
+full = [
+    "dnspython>=2.3",
+    "reportlab>=4.0",
+    "matplotlib>=3.6",
+]
+dev = [
+    "ruff>=0.4",
+]
+
+[project.urls]
+Homepage = "https://github.com/CybersRMUTL/security-audit-toolkit"
+Issues = "https://github.com/CybersRMUTL/security-audit-toolkit/issues"
+
+[project.scripts]
+security-audit = "security_audit_toolkit:main"
+
+[tool.setuptools]
+py-modules = ["security_audit_toolkit"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py39"
+
+[tool.ruff.lint]
+# Keep linting lenient for a large single-file tool; expand over time.
+select = ["E", "F", "W"]
+ignore = ["E501", "E741"]
