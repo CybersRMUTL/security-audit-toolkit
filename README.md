@@ -38,6 +38,7 @@
 - [การให้คะแนนความเสี่ยง](#-การให้คะแนนความเสี่ยง)
 - [คำถามพบบ่อย](#-คำถามพบบ่อย)
 - [ร่วมพัฒนา](#-ร่วมพัฒนา)
+- [ติดต่อ](#-ติดต่อ)
 - [สัญญาอนุญาต](#-สัญญาอนุญาต)
 
 ## ✨ เครื่องมือนี้ทำอะไรได้
@@ -348,6 +349,15 @@ portal.example.ac.th,ระบบพอร์ทัลตัวอย่าง
 
 ยินดีรับการช่วยพัฒนา — อ่าน [CONTRIBUTING.md](CONTRIBUTING.md) และ [แนวปฏิบัติของชุมชน](CODE_OF_CONDUCT.md) หากพบช่องโหว่ในตัวเครื่องมือเอง โปรดแจ้งแบบส่วนตัวตาม [SECURITY.md](SECURITY.md)
 
+## 📬 ติดต่อ
+
+พัฒนาและดูแลโดยทีม **RMUT CERT** — มหาวิทยาลัยเทคโนโลยีราชมงคลล้านนา
+
+- 📧 อีเมล: [cybers@rmutl.ac.th](mailto:cybers@rmutl.ac.th)
+- 🌐 เว็บไซต์: [https://aicyber.rmutl.ac.th/](https://aicyber.rmutl.ac.th/)
+
+หากมีคำถาม ข้อเสนอแนะ หรือต้องการแจ้งปัญหา สามารถเปิด [Issue บน GitHub](https://github.com/CybersRMUTL/security-audit-toolkit/issues) หรือติดต่อผ่านช่องทางข้างต้นได้
+
 ## 📜 สัญญาอนุญาต
 
 เผยแพร่ภายใต้สัญญาอนุญาต [MIT](LICENSE)
@@ -356,4 +366,6 @@ portal.example.ac.th,ระบบพอร์ทัลตัวอย่าง
 
 <div align="center">
 <sub>พัฒนาเพื่องานความมั่นคงปลอดภัยเชิงรับและการทดสอบที่ได้รับอนุญาต โดยทีม RMUT CERT</sub>
+<br>
+<sub>📧 <a href="mailto:cybers@rmutl.ac.th">cybers@rmutl.ac.th</a> · 🌐 <a href="https://aicyber.rmutl.ac.th/">aicyber.rmutl.ac.th</a></sub>
 </div>

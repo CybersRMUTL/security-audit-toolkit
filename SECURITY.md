@@ -8,7 +8,7 @@ This toolkit is intended **solely for authorized security testing** — against 
 
 If you discover a security issue **in this toolkit itself** (for example, a flaw that could harm its operator, leak evidence, or be abused), please report it privately rather than opening a public issue.
 
-- Email the maintainers (see the repository owner's profile), or
+- Email the maintainers at **cybers@rmutl.ac.th**, or
 - Use GitHub's **private vulnerability reporting** (Security → *Report a vulnerability*).
 
 Please include:

@@ -9,7 +9,7 @@ description = "All-in-One authorized vulnerability scanner, RCE verifier, and re
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
-authors = [{ name = "RMUT CERT" }]
+authors = [{ name = "RMUT CERT", email = "cybers@rmutl.ac.th" }]
 keywords = ["security", "cert", "vulnerability-scanner", "cve", "dfir", "incident-response"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
