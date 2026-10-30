@@ -71,14 +71,34 @@
 
 ## 📦 ติดตั้ง (ทำครั้งเดียว)
 
-**ขั้นที่ 1 — ดาวน์โหลดโค้ดและเข้าโฟลเดอร์**
+**ขั้นที่ 1 — ติดตั้ง Python 3.9 ขึ้นไป** (ถ้ามีอยู่แล้ว ข้ามไปขั้นที่ 2)
+
+- **Windows:** โหลดตัวติดตั้งจาก [python.org/downloads](https://www.python.org/downloads/) กดเปิดไฟล์ที่โหลดมา แล้ว **ติ๊กถูกที่ช่อง `Add python.exe to PATH` ก่อนกด Install** (สำคัญมาก ถ้าไม่ติ๊ก คำสั่ง `python` จะใช้ไม่ได้) — หรือติดตั้งจาก **Microsoft Store** โดยค้นหาคำว่า `Python 3.12`
+- **macOS:** โดยปกติมี Python มาให้แล้ว ถ้าไม่มีให้ติดตั้งผ่าน [Homebrew](https://brew.sh) ด้วย `brew install python` หรือโหลดจาก [python.org/downloads](https://www.python.org/downloads/)
+- **Linux (Ubuntu/Debian):**
+
+```bash
+sudo apt update && sudo apt install -y python3 python3-pip git
+```
+
+ตรวจว่าติดตั้งสำเร็จ (เห็นเลขเวอร์ชัน 3.9 ขึ้นไปถือว่าใช้ได้):
+
+```bash
+python3 --version
+```
+
+> ผู้ใช้ Windows ใช้ `python --version` แทน
+
+**ขั้นที่ 2 — ดาวน์โหลดโค้ดและเข้าโฟลเดอร์**
 
 ```bash
 git clone https://github.com/CybersRMUTL/security-audit-toolkit.git
 cd security-audit-toolkit
 ```
 
-**ขั้นที่ 2 — ติดตั้งไลบรารีที่ต้องใช้** (ครบทุกตัวในคำสั่งเดียว)
+> ยังไม่มี Git ? บน Windows โหลดได้ที่ [git-scm.com](https://git-scm.com/download/win) หรือจะกดปุ่มเขียว **Code → Download ZIP** บนหน้า GitHub แล้วแตกไฟล์ก็ได้เช่นกัน
+
+**ขั้นที่ 3 — ติดตั้งไลบรารีที่ต้องใช้** (ครบทุกตัวในคำสั่งเดียว)
 
 ```bash
 pip install -r requirements.txt
