@@ -1,132 +1,165 @@
 <div align="center">
 
-# 🛡️ RMUT CERT — All-in-One Vulnerability Toolkit
+# 🛡️ Security Audit Toolkit (RMUT CERT)
 
-**Authorized vulnerability scanner · RCE verifier with chain-of-custody · automated report generator**
+**เครื่องมือตรวจหาช่องโหว่ + ยืนยันผล + ออกรายงาน แบบครบในตัวเดียว สำหรับทีม CERT**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/)
-[![Code style: ruff](https://img.shields.io/badge/lint-ruff-261230.svg)](https://github.com/astral-sh/ruff)
-[![Authorized use only](https://img.shields.io/badge/use-authorized%20only-red.svg)](#%EF%B8%8F-legal--responsible-use)
+[![ใช้เฉพาะที่ได้รับอนุญาต](https://img.shields.io/badge/%E0%B9%83%E0%B8%8A%E0%B9%89%E0%B9%80%E0%B8%89%E0%B8%9E%E0%B8%B2%E0%B8%B0%E0%B8%97%E0%B8%B5%E0%B9%88%E0%B9%84%E0%B8%94%E0%B9%89%E0%B8%A3%E0%B8%B1%E0%B8%9A%E0%B8%AD%E0%B8%99%E0%B8%B8%E0%B8%8D%E0%B8%B2%E0%B8%95-red.svg)](#%EF%B8%8F-ข้อควรระวังด้านกฎหมายและการใช้งาน)
 
-A single-file, dependency-light toolkit used by a university CERT team to **scan**, **verify**, and **report** web-infrastructure vulnerabilities on systems they are **authorized to test**.
+เครื่องมือไฟล์เดียว ติดตั้งง่าย ใช้โดยทีม CERT ของมหาวิทยาลัยเพื่อ **สแกน → ยืนยันช่องโหว่ → ออกรายงาน** บนระบบที่ **ได้รับอนุญาตให้ทดสอบเท่านั้น**
 
 </div>
 
 ---
 
-> ## ⚠️ Legal & Responsible Use
+> ## ⚠️ ข้อควรระวังด้านกฎหมายและการใช้งาน
 >
-> This tool actively probes targets and can attempt proof-of-concept exploitation (RCE verification). **Use it only against systems you own or have explicit, written permission to test.** Unauthorized scanning or exploitation is illegal in most jurisdictions.
+> เครื่องมือนี้ยิงคำขอไปยังเป้าหมายจริง และสามารถทดลองยืนยันช่องโหว่ (RCE) ได้ **ใช้ได้เฉพาะกับระบบที่คุณเป็นเจ้าของ หรือได้รับอนุญาตเป็นลายลักษณ์อักษรให้ทดสอบเท่านั้น** การสแกนหรือโจมตีระบบที่ไม่ได้รับอนุญาตผิดกฎหมายในเกือบทุกประเทศ
 >
-> - The `--pipeline` (exploit) mode **requires** the explicit `--i-own-this-target` flag.
-> - You are solely responsible for how you use this software. See the [MIT License](LICENSE) — it is provided **"as is", without warranty**.
-> - Do **not** commit real scan results, evidence, or host lists. The included [`.gitignore`](.gitignore) blocks them by default.
+> - โหมด `--pipeline` (ทดสอบเจาะจริง) **บังคับ** ต้องใส่ธง `--i-own-this-target` เพื่อยืนยันความเป็นเจ้าของ
+> - ผู้ใช้รับผิดชอบการใช้งานเองทั้งหมด ซอฟต์แวร์ให้มา **"ตามสภาพ" ไม่มีการรับประกัน** (ดู [สัญญาอนุญาต MIT](LICENSE))
+> - **ห้าม** อัปโหลดผลสแกนจริง หลักฐาน หรือรายชื่อโฮสต์ขึ้น repo — ไฟล์ [`.gitignore`](.gitignore) กันให้อยู่แล้ว อย่าแก้ออก
 
 ---
 
-## ✨ Features
+## 📋 สารบัญ
 
-- **🔍 Scanner** — checks 13 CVEs across **PHP (3)**, **NGINX (5)**, **Node.js (4)**, and **GitLab (1)**, plus LFI/path-traversal signal detection.
-- **🎯 Flexible targeting** — single host, CIDR range, wildcard/subdomain enumeration (optional DNS + c99.nl), or a file list (CSV/TXT).
-- **🧪 RCE verification** — safe proof-of-concept checks that produce a **chain-of-custody evidence folder** (`transcript.log`, `metadata.json`, `summary.json`, `rce_proof.txt`).
-- **📊 Report generator** — multi-chapter **PDF** + **CSV/Excel** + **4 charts (PNG)**, with a per-host risk index based on **CVSS v3.1**.
-- **🔗 Full pipeline** — `Scan → Verify → Report`, fully automated.
-- **🖥️ Dual interface** — interactive menu *and* scriptable CLI flags.
-- **🧩 Graceful degradation** — optional libraries (`dnspython`, `reportlab`, `matplotlib`) are not required; the tool falls back automatically.
-- **🧷 Safe-by-default outputs** — every file is timestamped and auto-renamed; nothing is overwritten.
+- [เครื่องมือนี้ทำอะไรได้](#-เครื่องมือนี้ทำอะไรได้)
+- [สิ่งที่ต้องมีก่อน](#-สิ่งที่ต้องมีก่อน)
+- [ติดตั้ง (ทำครั้งเดียว)](#-ติดตั้ง-ทำครั้งเดียว)
+- [เริ่มใช้งาน](#-เริ่มใช้งาน)
+- [คำสั่งที่ใช้บ่อย](#-คำสั่งที่ใช้บ่อย)
+- [ตัวเลือกเสริม](#-ตัวเลือกเสริม)
+- [ไฟล์ผลลัพธ์ที่ได้](#-ไฟล์ผลลัพธ์ที่ได้)
+- [การให้คะแนนความเสี่ยง](#-การให้คะแนนความเสี่ยง)
+- [คำถามพบบ่อย](#-คำถามพบบ่อย)
+- [ร่วมพัฒนา](#-ร่วมพัฒนา)
+- [สัญญาอนุญาต](#-สัญญาอนุญาต)
 
-## 📦 Installation
+## ✨ เครื่องมือนี้ทำอะไรได้
 
-Requires **Python 3.9+**.
+- **🔍 สแกนช่องโหว่** — ตรวจ 13 CVE ครอบคลุม **PHP (3)**, **NGINX (5)**, **Node.js (4)**, **GitLab (1)** พร้อมตรวจจับสัญญาณ LFI / path traversal
+- **🎯 เลือกเป้าหมายได้หลายแบบ** — โฮสต์เดียว, ช่วง IP (CIDR), ค้นหาซับโดเมน (wildcard), หรืออ่านจากไฟล์รายชื่อ (CSV/TXT)
+- **🧪 ยืนยันช่องโหว่ RCE** — ตรวจแบบปลอดภัย พร้อมเก็บ **หลักฐานตามหลัก chain-of-custody** (`transcript.log`, `metadata.json`, `summary.json`, `rce_proof.txt`)
+- **📊 ออกรายงานอัตโนมัติ** — ไฟล์ **PDF** (6 บท) + **CSV/Excel** + **กราฟ 4 รูป (PNG)** พร้อมดัชนีความเสี่ยงรายโฮสต์ตามมาตรฐาน **CVSS v3.1**
+- **🔗 โหมดครบวงจร (Pipeline)** — สแกน → ยืนยัน → ออกรายงาน ในคำสั่งเดียว
+- **🖥️ ใช้ได้ 2 แบบ** — เมนูโต้ตอบ หรือพิมพ์คำสั่ง (CLI) สำหรับทำสคริปต์
+- **🧩 ไลบรารีเสริมไม่มีก็ทำงานได้** — ถ้าไม่มี `dnspython`, `reportlab`, `matplotlib` โปรแกรมจะข้ามฟีเจอร์นั้นให้เองโดยไม่ล้ม
+- **🧷 ปลอดภัยกับไฟล์เดิม** — ทุกไฟล์ผลลัพธ์มี timestamp ต่อท้าย ไม่เขียนทับของเก่า
+
+## ✅ สิ่งที่ต้องมีก่อน
+
+- **Python 3.9 ขึ้นไป** (ตรวจเวอร์ชันด้วย `python3 --version`)
+- `pip` สำหรับติดตั้งไลบรารี
+- สิทธิ์/หนังสืออนุญาตให้ทดสอบระบบเป้าหมาย
+
+## 📦 ติดตั้ง (ทำครั้งเดียว)
 
 ```bash
+# 1) ดาวน์โหลดโค้ด
 git clone https://github.com/CybersRMUTL/security-audit-toolkit.git
 cd security-audit-toolkit
 
-# install everything (recommended)
+# 2) ติดตั้งไลบรารีที่ต้องใช้
 pip install -r requirements.txt
-
-# or install as a command-line tool
-pip install ".[full]"      # exposes the `rmut-cert` command
 ```
 
-Minimum is just `requests`; `dnspython`, `reportlab`, and `matplotlib` unlock wildcard enumeration and report generation.
+> อยากใช้เป็นคำสั่งลัดชื่อ `security-audit` ทั่วเครื่อง? ติดตั้งแบบนี้แทน:
+> ```bash
+> pip install ".[full]"
+> ```
+> จากนั้นเรียกใช้ด้วย `security-audit` แทน `python3 security_audit_toolkit.py` ได้เลย
 
-## 🚀 Quick Start
+ไลบรารีขั้นต่ำคือ `requests` อย่างเดียว ส่วน `dnspython`, `reportlab`, `matplotlib` ช่วยปลดล็อกการค้นหาซับโดเมนและการออกรายงาน
+
+## 🚀 เริ่มใช้งาน
+
+**วิธีง่ายที่สุด — เปิดเมนูโต้ตอบ** (ไม่ต้องจำคำสั่ง เลือกจากตัวเลข):
 
 ```bash
-# Interactive menu
 python3 security_audit_toolkit.py
-
-# Show the 13 CVEs checked, then exit
-python3 security_audit_toolkit.py --list-cves
-
-# Scan a single host (you must confirm scope at the prompt)
-python3 security_audit_toolkit.py --target 192.168.1.10
-
-# Scan a CIDR range
-python3 security_audit_toolkit.py --cidr 192.168.1.0/24
-
-# Wildcard / subdomain scan (add --c99-key KEY for broader coverage)
-python3 security_audit_toolkit.py --wildcard example.org
-
-# Scan from a host list file
-python3 security_audit_toolkit.py --list hosts.csv
-
-# Full pipeline — scan + verify + report (ownership flag REQUIRED)
-python3 security_audit_toolkit.py --pipeline 192.168.1.10 --i-own-this-target
-
-# Generate a report from an existing scan JSON
-python3 security_audit_toolkit.py --report scan.json
 ```
 
-If installed with `pip`, replace `python3 security_audit_toolkit.py` with `security-audit`.
+**ดูรายการ 13 CVE ที่โปรแกรมตรวจ แล้วออก:**
 
-### Common options
+```bash
+python3 security_audit_toolkit.py --list-cves
+```
 
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--depth N` | Crawl depth (max 20) | `2` |
-| `--max-pages N` | Max pages per host | `50` |
-| `--timeout SEC` | HTTP timeout | `8.0` |
-| `--c99-key KEY` | c99.nl SubdomainFinder API key (optional) | — |
-| `--output-dir DIR` | Report output directory | `reports` |
-| `--no-verify-ssl` | Skip TLS verification | off |
-| `--no-interactive` | Non-interactive mode | off |
+**ลองสแกนโฮสต์เดียว** (โปรแกรมจะถามยืนยันขอบเขตก่อนเริ่ม):
 
-## 📂 Output structure
+```bash
+python3 security_audit_toolkit.py --target 192.168.1.10
+```
 
-| Mode | Output |
-|------|--------|
-| Scan | `scan_<mode>_<target>_<timestamp>.json` |
-| RCE verify | `evidence/<host>_<timestamp>/` (transcript, metadata, proofs) |
-| Report | `reports/<timestamp>/` — PDF (6 chapters) + CSV + 4 charts |
-| Pipeline | `pipeline_*.json` + `evidence/` + `reports/` |
+## 🔧 คำสั่งที่ใช้บ่อย
 
-> 🔒 All of these are **git-ignored** so real findings never reach the repository.
+| อยากทำอะไร | พิมพ์คำสั่ง |
+|-----------|-----------|
+| เปิดเมนูโต้ตอบ | `python3 security_audit_toolkit.py` |
+| ดู 13 CVE ที่ตรวจ | `python3 security_audit_toolkit.py --list-cves` |
+| สแกนโฮสต์เดียว | `python3 security_audit_toolkit.py --target 192.168.1.10` |
+| สแกนช่วง IP (CIDR) | `python3 security_audit_toolkit.py --cidr 192.168.1.0/24` |
+| ค้นหา + สแกนซับโดเมน | `python3 security_audit_toolkit.py --wildcard example.org` |
+| สแกนจากไฟล์รายชื่อโฮสต์ | `python3 security_audit_toolkit.py --list hosts.csv` |
+| ครบวงจร (สแกน+ยืนยัน+รายงาน) | `python3 security_audit_toolkit.py --pipeline 192.168.1.10 --i-own-this-target` |
+| ออกรายงานจากไฟล์ผลสแกน | `python3 security_audit_toolkit.py --report scan.json` |
 
-## 🧮 Risk scoring
+> ถ้าติดตั้งด้วย `pip` แล้ว ใช้ `security-audit` แทน `python3 security_audit_toolkit.py` ได้ทุกคำสั่ง
 
-Per-host risk is a 0–100 index derived from **CVSS v3.1** base scores of *confirmed* findings, weighted by a Report Confidence multiplier (confirmed = 1.0, signal = 0.6, unknown/safe/N/A = 0.0), normalized against the CVSS cap of 10.0.
+## ⚙️ ตัวเลือกเสริม
 
-## 🗺️ Roadmap
+| ธง (flag) | ความหมาย | ค่าเริ่มต้น |
+|-----------|----------|------------|
+| `--depth N` | ความลึกการไล่หน้าเว็บ (สูงสุด 20) | `2` |
+| `--max-pages N` | จำนวนหน้าสูงสุดต่อโฮสต์ | `50` |
+| `--timeout SEC` | เวลารอตอบกลับ (วินาที) | `8.0` |
+| `--c99-key KEY` | API key ของ c99.nl (ช่วยหาซับโดเมนได้มากขึ้น) | — |
+| `--output-dir DIR` | โฟลเดอร์เก็บรายงาน | `reports` |
+| `--no-verify-ssl` | ข้ามการตรวจใบรับรอง TLS | ปิดอยู่ |
+| `--no-interactive` | โหมดไม่โต้ตอบ (ใช้กับสคริปต์) | ปิดอยู่ |
 
-- [ ] Split the single file into an installable package (`src/` layout)
-- [ ] Unit tests + CI coverage of the scan/report logic
-- [ ] JSON schema for scan output
-- [ ] Pluggable CVE check modules
+## 📂 ไฟล์ผลลัพธ์ที่ได้
 
-## 🤝 Contributing
+| โหมด | ไฟล์/โฟลเดอร์ที่ได้ |
+|------|--------------------|
+| สแกน (Scan) | `scan_<โหมด>_<เป้าหมาย>_<เวลา>.json` |
+| ยืนยัน RCE | โฟลเดอร์ `evidence/<โฮสต์>_<เวลา>/` (transcript, metadata, หลักฐาน) |
+| ออกรายงาน | โฟลเดอร์ `reports/<เวลา>/` — PDF 6 บท + CSV + กราฟ 4 รูป |
+| ครบวงจร (Pipeline) | `pipeline_*.json` + `evidence/` + `reports/` |
 
-Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md). Please report security issues privately as described in [SECURITY.md](SECURITY.md).
+> 🔒 ไฟล์เหล่านี้ถูก **git ยกเว้นให้ทั้งหมด** ผลการค้นหาจริงจึงไม่หลุดขึ้น repo
 
-## 📜 License
+## 🧮 การให้คะแนนความเสี่ยง
 
-Released under the [MIT License](LICENSE).
+คะแนนความเสี่ยงรายโฮสต์เป็นดัชนี 0–100 คำนวณจากคะแนนพื้นฐาน **CVSS v3.1** ของช่องโหว่ที่ *ยืนยันแล้ว* คูณกับตัวคูณความเชื่อมั่น (ยืนยันเสี่ยง = 1.0, พบสัญญาณเสี่ยง = 0.6, ไม่ทราบ/ปลอดภัย/ไม่เกี่ยว = 0.0) แล้วเทียบกับเพดาน CVSS ที่ 10.0
+
+## ❓ คำถามพบบ่อย
+
+**ติดตั้งแล้วรันไม่ขึ้น บอกว่า `ModuleNotFoundError: requests`**
+ยังไม่ได้ติดตั้งไลบรารี ให้รัน `pip install -r requirements.txt` ก่อน
+
+**ออกรายงาน PDF ไม่ได้ / ไม่มีกราฟ**
+ยังไม่ได้ติดตั้ง `reportlab` และ `matplotlib` — ติดตั้งครบด้วย `pip install -r requirements.txt` หรือ `pip install ".[full]"`
+
+**โหมด pipeline ขึ้นว่าต้องมี `--i-own-this-target`**
+เป็นระบบกันพลาด ต้องใส่ธงนี้เพื่อยืนยันว่าเป้าหมายเป็นของคุณ/ได้รับอนุญาตแล้ว
+
+**สแกน wildcard แล้วเจอซับโดเมนน้อย**
+ติดตั้ง `dnspython` และ/หรือใส่ `--c99-key` เพื่อให้ค้นหาได้กว้างขึ้น
+
+## 🤝 ร่วมพัฒนา
+
+ยินดีรับการช่วยพัฒนา — อ่าน [CONTRIBUTING.md](CONTRIBUTING.md) และ [แนวปฏิบัติของชุมชน](CODE_OF_CONDUCT.md) หากพบช่องโหว่ในตัวเครื่องมือเอง โปรดแจ้งแบบส่วนตัวตาม [SECURITY.md](SECURITY.md)
+
+## 📜 สัญญาอนุญาต
+
+เผยแพร่ภายใต้สัญญาอนุญาต [MIT](LICENSE)
 
 ---
 
 <div align="center">
-<sub>Built for defensive security and authorized testing by the RMUT CERT team.</sub>
+<sub>พัฒนาเพื่องานความมั่นคงปลอดภัยเชิงรับและการทดสอบที่ได้รับอนุญาต โดยทีม RMUT CERT</sub>
 </div>
