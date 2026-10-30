@@ -5412,8 +5412,11 @@ def _build_pdf(data, charts, output_path, font):
         if not cols or not mrows_src:
             story.append(P("ไม่มีข้อมูลเพียงพอสำหรับสร้างเมทริกซ์ (ไม่พบโฮสต์ที่มีสถานะเสี่ยง/เตือน/ไม่ทราบ)", note))
         else:
-            # แบ่งคอลัมน์เป็นชุดละไม่เกิน 14 ตัว เพื่อไม่ให้ตารางล้นหน้า
-            CHUNK = 14
+            # จำนวนคอลัมน์สูงสุดที่ยังพอดีหน้าเดียว (ความกว้างคอลัมน์ขั้นต่ำ 0.62 ซม.)
+            # แล้วแบ่งคอลัมน์เป็นชุดที่ "เท่า ๆ กัน" เพื่อไม่ให้ชุดสุดท้ายมีคอลัมน์โดดเดี่ยว 1–2 ตัวจนกินหน้าเพิ่ม
+            _MAXCOLS = int((16.2 - 3.8) / 0.62)          # ≈ 20 คอลัมน์ต่อหนึ่งตาราง
+            _nchunks = max(1, (len(cols) + _MAXCOLS - 1) // _MAXCOLS)
+            CHUNK = (len(cols) + _nchunks - 1) // _nchunks
             for ci in range(0, len(cols), CHUNK):
                 cset = cols[ci:ci + CHUNK]
                 ncol = len(cset)
