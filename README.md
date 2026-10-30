@@ -71,12 +71,16 @@
 
 ## 📦 ติดตั้ง (ทำครั้งเดียว)
 
+**ขั้นที่ 1 — ดาวน์โหลดโค้ดและเข้าโฟลเดอร์**
+
 ```bash
-# 1) ดาวน์โหลดโค้ด
 git clone https://github.com/CybersRMUTL/security-audit-toolkit.git
 cd security-audit-toolkit
+```
 
-# 2) ติดตั้งไลบรารีที่ต้องใช้ (ครบทุกตัวในคำสั่งเดียว)
+**ขั้นที่ 2 — ติดตั้งไลบรารีที่ต้องใช้** (ครบทุกตัวในคำสั่งเดียว)
+
+```bash
 pip install -r requirements.txt
 ```
 
@@ -93,8 +97,9 @@ pip install -r requirements.txt
 **วิธีง่ายที่สุด — เปิดเมนูโต้ตอบ** (ไม่ต้องจำคำสั่ง เลือกจากตัวเลข):
 
 
+พิมพ์คำสั่งนี้บน Terminal แล้วกด Enter
+
 ```bash
-# 1) รันคำสั่งสคริปต์ Python บน Terminal ด้วย
 python3 security_audit_toolkit.py
 ```
 ## 📑 หน้าต่างเมนูโต้ตอบ (Interactive Menu) 
