@@ -4411,7 +4411,7 @@ def _chart_hosts(data, path, thai):
     ax.grid(axis="y", visible=False)
     for sp in ("top", "right", "left"):
         ax.spines[sp].set_visible(False)
-    ax.set_title(f"ภาพรวมโฮสต์ (ทั้งหมด {s['hosts_total']})" if thai else f"Hosts overview ({s['hosts_total']})")
+    ax.set_title(f"ภาพรวมโฮสต์ · นับรายเครื่อง (ทั้งหมด {s['hosts_total']})" if thai else f"Hosts overview ({s['hosts_total']})")
     fig.tight_layout(); fig.savefig(path, dpi=150, bbox_inches="tight"); plt.close(fig)
 
 
@@ -4458,7 +4458,7 @@ def _chart_status(data, path, thai):
     ax.grid(axis="y", visible=False)
     for sp in ("top", "right", "left"):
         ax.spines[sp].set_visible(False)
-    ax.set_title("สถานะรายการช่องโหว่" if thai else "Findings by Status")
+    ax.set_title("สถานะรายการตรวจ CVE · นับรายหัวข้อ" if thai else "Findings by Status (per check)")
     fig.tight_layout(); fig.savefig(path, dpi=150, bbox_inches="tight"); plt.close(fig)
 
 
@@ -4912,12 +4912,12 @@ def _build_pdf(data, charts, output_path, font):
         # กราฟวงกลม: สัดส่วนโฮสต์เสี่ยงเทียบกับโฮสต์ทั้งหมด (แสดงเสมอในโหมดหลายโฮสต์)
         if multi:
             for fl in native_pie(
-                [("เสี่ยง", s["hosts_vulnerable"], PALETTE["vuln"]),
+                [("เสี่ยงสูง", s["hosts_vulnerable"], PALETTE["vuln"]),
                  ("อาจเสี่ยง", s["hosts_warning"], PALETTE["warn"]),
                  ("ยังไม่ทราบ", s["hosts_unknown"], PALETTE["unknown"]),
                  ("ปลอดภัย", s["hosts_safe"], PALETTE["safe"]),
                  ("เข้าไม่ถึง", s["hosts_unreachable"], "#c7ccd6")],
-                    title=f"สัดส่วนโฮสต์ตามระดับความเสี่ยง (ทั้งหมด {s['hosts_total']} โฮสต์)"):
+                    title=f"ภาพรวมโฮสต์ตามระดับความเสี่ยง · นับรายเครื่อง (ทั้งหมด {s['hosts_total']} โฮสต์)"):
                 story.append(fl)
             story.append(Spacer(1, 0.4 * cm))
 
@@ -4990,12 +4990,12 @@ def _build_pdf(data, charts, output_path, font):
             story.append(Spacer(1, 0.3 * cm))
             if multi:
                 for fl in native_bars(
-                    [("เสี่ยง", s["hosts_vulnerable"], PALETTE["vuln"]),
+                    [("เสี่ยงสูง", s["hosts_vulnerable"], PALETTE["vuln"]),
                      ("อาจเสี่ยง", s["hosts_warning"], PALETTE["warn"]),
                      ("ยังไม่ทราบ", s["hosts_unknown"], PALETTE["unknown"]),
                      ("ปลอดภัย", s["hosts_safe"], PALETTE["safe"]),
                      ("เข้าไม่ถึง", s["hosts_unreachable"], "#c7ccd6")],
-                        title=f"ภาพรวมโฮสต์ (ทั้งหมด {s['hosts_total']})"):
+                        title=f"ภาพรวมโฮสต์ · นับรายเครื่อง (ทั้งหมด {s['hosts_total']})"):
                     story.append(fl)
                 story.append(Spacer(1, 0.35 * cm))
             _sev_imp = s.get("by_severity_impact") or s["by_severity"]
@@ -5009,11 +5009,11 @@ def _build_pdf(data, charts, output_path, font):
                 story.append(fl)
             story.append(Spacer(1, 0.35 * cm))
             for fl in native_bars(
-                [("เสี่ยง", s["vulnerable"], PALETTE["vuln"]),
+                [("ยืนยันเสี่ยง", s["vulnerable"], PALETTE["vuln"]),
                  ("อาจเสี่ยง", s["warning"], PALETTE["warn"]),
                  ("ยังไม่ทราบ", s["unknown"], PALETTE["unknown"]),
                  ("ปลอดภัย", s["safe"], PALETTE["safe"])],
-                    title="จำนวนรายการช่องโหว่ตามสถานะ"):
+                    title="ภาพรวมรายการตรวจ CVE ตามสถานะ · นับรายหัวข้อ"):
                 story.append(fl)
             story.append(P("หมายเหตุ: ติดตั้ง matplotlib (pip install matplotlib) เพื่อให้ได้กราฟวงกลม/เกจรูปแบบสมบูรณ์",
                            st("mplnote", fontSize=8, leading=11, textColor=GREY, spaceBefore=6)))
@@ -6495,11 +6495,20 @@ td.mxc{text-align:center;font-weight:800;color:#fff;padding:5px 4px;border:1px s
   </div>
 </div>
 
+<p style="margin:0 0 6px;font-size:12px;font-weight:700;color:var(--muted)">การ์ดสรุปด้านล่างนับ <b style="color:var(--ink)">รายหัวข้อการตรวจ CVE</b> (1 โฮสต์มีได้หลายรายการ)</p>
 <div class="cards" id="cards"></div>
 
 <div class="row2">
-  <div class="panel"><h3>ภาพรวม</h3><div id="ov"></div></div>
-  <div class="panel"><h3>ความรุนแรง</h3><div id="sev"></div></div>
+  <div class="panel"><h3>ภาพรวมโฮสต์ <span style="font-weight:400;color:var(--muted);font-size:12px">· นับรายเครื่อง</span></h3><div id="ovh"></div></div>
+  <div class="panel"><h3>ภาพรวมรายการตรวจ CVE <span style="font-weight:400;color:var(--muted);font-size:12px">· นับรายหัวข้อ</span></h3><div id="ov"></div></div>
+</div>
+<div class="row2">
+  <div class="panel"><h3>ความรุนแรง <span style="font-weight:400;color:var(--muted);font-size:12px">· นับรายหัวข้อ CVE</span></h3><div id="sev"></div></div>
+  <div class="panel"><h3>คำอธิบายหน่วยนับ</h3><div style="font-size:12.5px;color:#444;line-height:1.8">
+    <b style="color:var(--ink)">รายเครื่อง (โฮสต์)</b> — จัดระดับของแต่ละเครื่อง ผลรวม = จำนวนโฮสต์ทั้งหมด<br>
+    <b style="color:var(--ink)">รายหัวข้อ CVE</b> — 1 เครื่องตรวจหลายหัวข้อ ตัวเลขจึงมากกว่าจำนวนเครื่อง<br>
+    <span style="color:var(--muted)">ตัวเลขทั้งสองหน่วยตรงกับไฟล์ PDF / Excel / CSV</span>
+  </div></div>
 </div>
 
 <!-- ── รายงานโฮสต์ ── -->
@@ -7050,20 +7059,39 @@ function updateOverviewAndSev(data){
     </div>`;
   }
 
-  let ovHtml = ovBar('ยืนยันเสี่ยง', v, m, LC.critical, 'vulnerable')
-             + ovBar('อาจเสี่ยง', w, m, LC.warning, 'warning')
-             + ovBar('ยังไม่ทราบ', u, m, LC.unknown, 'unknown')
-             + ovBar('ปลอดภัย', s, m, LC.safe, 'safe');
-  if(unreach > 0 || !data.isFiltered){
-    const p = Math.round((unreach/m)*100);
-    ovHtml += `<div class="bar" onclick="filterByUnreachable()" style="cursor:pointer" title="คลิกเพื่อกรอง: เข้าไม่ถึง">
-      <span class="lab">เข้าไม่ถึง 🔍</span>
-      <span class="track"><span class="fill" style="width:${p}%;background:${LC['n/a']}"></span></span>
-      <span class="v" style="color:${LC['n/a']}">${unreach}</span>
-    </div>`;
-  }
+  // หมายเหตุ: การ์ดนี้นับ "รายหัวข้อ CVE" เท่านั้น — "เข้าไม่ถึง" เป็นหน่วยโฮสต์ จึงย้ายไปการ์ดภาพรวมโฮสต์
+  const mm = Math.max(v, w, u, s, 1);
+  let ovHtml = ovBar('ยืนยันเสี่ยง', v, mm, LC.critical, 'vulnerable')
+             + ovBar('อาจเสี่ยง', w, mm, LC.warning, 'warning')
+             + ovBar('ยังไม่ทราบ', u, mm, LC.unknown, 'unknown')
+             + ovBar('ปลอดภัย', s, mm, LC.safe, 'safe');
   const ovEl = document.getElementById('ov');
   if(ovEl) ovEl.innerHTML = ovHtml;
+
+  // Host-level overview (นับรายเครื่อง) — ตัวเลขตรงกับการกระจายโฮสต์ในไฟล์ PDF/Excel
+  const hv = hh.filter(h => h.reachable && h.level==='critical').length;
+  const hw = hh.filter(h => h.reachable && h.level==='warning').length;
+  const hu = hh.filter(h => h.reachable && h.level==='unknown').length;
+  const hs = hh.filter(h => h.reachable && h.level==='safe').length;
+  const hur = hh.filter(h => !h.reachable).length;
+  const hm = Math.max(hv, hw, hu, hs, hur, 1);
+  function ovhBar(lab, val, col, act){
+    const p = Math.round((val/hm)*100);
+    return `<div class="bar" onclick="${act}" style="cursor:pointer" title="คลิกเพื่อกรองโฮสต์: ${lab}">
+      <span class="lab">${lab} 🔍</span>
+      <span class="track"><span class="fill" style="width:${p}%;background:${col}"></span></span>
+      <span class="v" style="color:${col}">${val}</span>
+    </div>`;
+  }
+  const ovhEl = document.getElementById('ovh');
+  if(ovhEl){
+    ovhEl.innerHTML =
+        ovhBar('เสี่ยงสูง', hv, LC.critical, "filterByLevel('critical')")
+      + ovhBar('อาจเสี่ยง', hw, LC.warning, "filterByLevel('warning')")
+      + ovhBar('ยังไม่ทราบ', hu, LC.unknown, "filterByLevel('unknown')")
+      + ovhBar('ปลอดภัย', hs, LC.safe, "filterByLevel('safe')")
+      + ovhBar('เข้าไม่ถึง', hur, LC['n/a'], "filterByUnreachable()");
+  }
 
   // Severity breakdown (นับเฉพาะรายการที่ตรวจพบจริง ยกเว้นผู้ใช้กดกรองสถานะอื่นโดยตรง)
   const sevCounts = { Critical: 0, High: 0, Medium: 0, Low: 0, Info: 0 };
