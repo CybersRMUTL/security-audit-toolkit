@@ -9373,6 +9373,7 @@ def main_menu():
         if pending_action is None:
             banner()
             print(f"  {c('คำแนะนำการใช้งาน:', C.B)} เลือกหมายเลขเมนูที่ต้องการ ด้านล่างแสดงรายละเอียดและ Output ของแต่ละเมนู")
+            print(f"  {c('⭐ แนะนำ:', C.YEL)} ใช้ครั้งแรกหรืออยากได้ครบจบในขั้นตอนเดียว ให้เลือก {c('เมนู 5) Full Pipeline', C.B)} — สแกน → ยืนยัน → ออกรายงาน อัตโนมัติ")
             print(c("─" * 74, C.D))
             action = ask_choice("เมนูหลัก (Main Menu):", [
                 ("cve",
@@ -9392,7 +9393,7 @@ def main_menu():
                  "นำไฟล์ JSON มาออกรายงานไทยพร้อมกราฟสถิติและคำอธิบาย",
                  "reports/*.pdf · *.csv · charts/*.png"),
                 ("pipeline",
-                 "Full Pipeline — ครบวงจรอัตโนมัติ",
+                 f"Full Pipeline — ครบวงจรอัตโนมัติ  {c('⭐ แนะนำ', C.YEL)}",
                  "Scan → RCE Verify (ถ้าเข้าเงื่อนไข) → Report ในคำสั่งเดียว",
                  "JSON + evidence/ + reports/"),
                 ("quit", "ออกจากโปรแกรม (Exit)", "", ""),
