@@ -337,6 +337,19 @@ DEVICE_SIGS = [
     ("Plesk",              [r"\bplesk\b"], r"Plesk[ /]+v?([\d.]+)", "Control Panel"),
     ("DirectAdmin",        [r"directadmin"], None, "Control Panel"),
     ("Webmin",             [r"\bwebmin\b"], r"Webmin[ /]+([\d.]+)", "Control Panel"),
+    # ── กล้องวงจรปิด / NVR / IoT (กลุ่ม 4 ThaiCERT — อุปกรณ์เครือข่าย) ──
+    ("Hikvision Camera/NVR", [r"hikvision", r"/doc/page/login", r"dnvrs-webs", r"dvrdvs-webs",
+                              r"app-webs", r"webcomponents\.js"], None, "CCTV/Camera"),
+    ("Dahua Camera/NVR",   [r"\bdahua\b", r"/rpc2_login", r"webplugin", r"/current_config/"], None, "CCTV/Camera"),
+    ("Axis Camera",        [r"\baxis\b.*camera", r"/axis-cgi/", r"server:\s*axis"], r"axis[^\d]{0,12}([\d.]+)", "CCTV/Camera"),
+    ("Uniview Camera/NVR", [r"uniview", r"\bunv\b", r"/cgi-bin/main-cgi"], None, "CCTV/Camera"),
+    ("Reolink Camera",     [r"reolink"], None, "CCTV/Camera"),
+    ("Vivotek Camera",     [r"vivotek", r"/cgi-bin/viewer/"], None, "CCTV/Camera"),
+    ("Mobotix Camera",     [r"mobotix"], None, "CCTV/Camera"),
+    ("Generic IP Camera",  [r"ip camera", r"network camera", r"netsurveillance", r"\bonvif\b",
+                            r"rtsp://", r"web service of ip camera", r"\bnvr\b.*login"], None, "CCTV/Camera"),
+    ("Printer (JetDirect/IPP)", [r"jetdirect", r"hp laserjet", r"/hp/device/", r"brother\b.*printer",
+                                 r"epson.*web", r"internet printing protocol"], None, "Printer"),
 ]
 
 # ชั้น container / reverse-proxy ที่ "เห็นจากภายนอกได้" (ชั้นในอื่น ๆ ต้องยืนยันบนเครื่อง)
