@@ -3431,14 +3431,18 @@ def scan_single_target(target_str, opts, idx=1, total=1):
     }
 
 
-def resolve_cidr(cidr, max_hosts=256):
+def resolve_cidr(cidr, max_hosts=4096):
     try:
         net = ipaddress.ip_network(cidr, strict=False)
     except ValueError as e:
         print(f"ERROR: {e}"); return []
     hosts = list(net.hosts()) if net.num_addresses > 2 else [net.network_address]
-    if len(hosts) > max_hosts:
-        print(f"  ⚠ จำกัด {max_hosts}/{len(hosts)} hosts")
+    total = len(hosts)
+    print(f"  📊 วง {net.with_prefixlen}: มีทั้งหมด {total:,} ไอพีที่จะสแกน "
+          f"(host discovery จะคัดเฉพาะที่มีพอร์ตเว็บเปิดก่อนสแกนเชิงลึก)")
+    if total > max_hosts:
+        print(f"  ⚠ เกินเพดานความปลอดภัย {max_hosts:,} ไอพี — จะสแกนเฉพาะ {max_hosts:,} ไอพีแรก "
+              f"(หากต้องการครบ ให้ระบุช่วง CIDR ที่เล็กลง)")
         hosts = hosts[:max_hosts]
     return [(f"https://{ip}", "cidr") for ip in hosts]
 
@@ -10759,8 +10763,7 @@ def menu_scan():
         scope = f"Target: {target}"
     elif mode == "cidr":
         cidr = ask("CIDR (เช่น 192.168.1.0/24)", required=True)
-        mh = ask_int("Max hosts", 256, 1, 65536)
-        targets = resolve_cidr(cidr, mh)
+        targets = resolve_cidr(cidr)
         if not targets: return None
         name = safe_name(cidr.replace("/", "_").replace(".", "_"))
         scope = f"CIDR: {cidr} ({len(targets)} hosts)"
@@ -10914,8 +10917,7 @@ def menu_rce_verify():
     # ── โหมด 2: CIDR ──
     if mode == "cidr":
         cidr = ask("CIDR", required=True)
-        mh = ask_int("Max hosts", 256, 1, 65536)
-        targets = resolve_cidr(cidr, mh)
+        targets = resolve_cidr(cidr)
         if not targets: return None
         if not confirm_scan_scope(f"CIDR: {cidr} ({len(targets)} hosts)"):
             return None
@@ -11157,8 +11159,7 @@ def menu_pipeline():
         default_threads = 1
     elif mode == "cidr":
         cidr = ask("CIDR (เช่น 192.168.1.0/24)", required=True)
-        mh = ask_int("Max hosts", 256, 1, 65536)
-        targets = resolve_cidr(cidr, mh)
+        targets = resolve_cidr(cidr)
         if not targets:
             return None
         name = safe_name(cidr.replace("/", "_").replace(".", "_"))
@@ -11455,7 +11456,7 @@ Examples:
     if args.cidr:
         banner()
         display_cve_list(verbose=False)
-        targets = resolve_cidr(args.cidr, 256)
+        targets = resolve_cidr(args.cidr)
         if not confirm_scan_scope(f"CIDR: {args.cidr} ({len(targets)} hosts)"):
             return 0
         opts = {"depth": _SCAN_DEPTH, "max_pages": _SCAN_MAX_PAGES, "timeout": args.timeout,
