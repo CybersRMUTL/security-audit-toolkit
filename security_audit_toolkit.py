@@ -8475,23 +8475,27 @@ def _osascript_choose(kind, title, start_dir, exts=None):
         import subprocess
         safe_title = title.replace("\\", "\\\\").replace('"', '\\"')
         loc = os.path.abspath(start_dir)
+        # เตรียมสคริปต์หลายแบบ: ลองแบบมีตัวกรองนามสกุลก่อน ถ้า macOS บางรุ่น error
+        # ที่ `of type {...}` ให้ลองแบบไม่กรองต่อ ก่อนจะยอมแพ้ (ดีกว่าหล่นไป CLI)
+        choosers = []
         if kind == "folder":
-            script = f'POSIX path of (choose folder with prompt "{safe_title}" default location (POSIX file "{loc}"))'
+            choosers.append(f'choose folder with prompt "{safe_title}" default location (POSIX file "{loc}")')
         else:
-            type_clause = ""
             if exts:
                 quoted = ", ".join('"' + e.lstrip(".") + '"' for e in exts)
-                type_clause = f" of type {{{quoted}}}"
-            script = f'POSIX path of (choose file with prompt "{safe_title}" default location (POSIX file "{loc}"){type_clause}'
-        # นำหน้าด้วย `activate` เพื่อดึง dialog ขึ้นมาหน้าสุดทันที (ไม่ให้ไปซ่อนหลัง Terminal)
-        # `activate` แบบ top-level ใช้สิทธิ์ของ osascript เอง ไม่ต้องขอ Automation permission
-        res = subprocess.run(["osascript", "-e", "activate", "-e", script],
-                             capture_output=True, text=True, timeout=600)
-        if res.returncode == 0 and res.stdout.strip():
-            return res.stdout.strip()
-        # returncode != 0 : แยกกรณี "ผู้ใช้กดยกเลิก" (-128) ออกจากข้อผิดพลาดจริง
-        if "-128" in res.stderr or "−128" in res.stderr or "User canceled" in res.stderr:
-            return ""
+                choosers.append(f'choose file with prompt "{safe_title}" default location (POSIX file "{loc}") of type {{{quoted}}}')
+            choosers.append(f'choose file with prompt "{safe_title}" default location (POSIX file "{loc}")')
+        for chooser in choosers:
+            # นำหน้าด้วย `activate` เพื่อดึง dialog ขึ้นมาหน้าสุดทันที (ไม่ให้ไปซ่อนหลัง Terminal)
+            # `activate` แบบ top-level ใช้สิทธิ์ของ osascript เอง ไม่ต้องขอ Automation permission
+            res = subprocess.run(["osascript", "-e", "activate", "-e", f'POSIX path of ({chooser})'],
+                                 capture_output=True, text=True, timeout=600)
+            if res.returncode == 0 and res.stdout.strip():
+                return res.stdout.strip()
+            # ผู้ใช้กดยกเลิก (-128) → หยุดเลย ไม่ต้องลองสคริปต์แบบอื่นต่อ
+            if "-128" in res.stderr or "−128" in res.stderr or "User canceled" in res.stderr:
+                return ""
+            # error อื่น (เช่น type list ใช้ไม่ได้) → วนไปลอง chooser ตัวถัดไป
         return None
     except Exception:
         return None
