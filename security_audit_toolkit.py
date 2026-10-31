@@ -348,6 +348,73 @@ CONTAINER_SIGS = [
     ("Docker (XAMPP/compose hint)", [r"\bxampp\b"]),
 ]
 
+# ── Component detection (DB / admin tools / JS libs) — กลุ่ม "ส่วนประกอบอื่น ๆ" ──
+# DB เห็นได้ทางอ้อมเท่านั้น (error/stack trace, phpMyAdmin/Adminer, phpinfo)
+# แต่ละตัว: (ชื่อ, [regex สัญญาณ], regex ดึงเวอร์ชัน|None)
+DB_SIGS = [
+    ("MySQL/MariaDB", [r"you have an error in your sql syntax", r"\bmysqli?_(?:connect|query|fetch|num_rows|error)",
+                       r"mysqlnd", r"supplied argument is not a valid mysql", r"warning:\s*mysql"],
+     r"(?:mysql|mariadb)[^\d]{0,24}(\d+\.\d+\.\d+)"),
+    ("MariaDB", [r"\bmariadb\b"], r"mariadb[^\d]{0,24}(\d+\.\d+\.\d+)"),
+    ("PostgreSQL", [r"\bpg_(?:query|connect|exec)\b", r"postgresql", r"\bPG::", r"org\.postgresql"],
+     r"postgresql[^\d]{0,16}(\d+(?:\.\d+)+)"),
+    ("MSSQL", [r"microsoft sql server", r"system\.data\.sqlclient", r"odbc sql server driver",
+               r"\[microsoft\]\[odbc"], r"sql server[^\d]{0,16}(\d+\.\d+)"),
+    ("SQLite", [r"sqlite3?::", r"sqliteexception", r"unable to open database file"],
+     r"sqlite[^\d]{0,10}(\d+\.\d+\.\d+)"),
+    ("Oracle", [r"\bORA-\d{4,5}\b", r"oracle error"], None),
+    ("MongoDB", [r"\bmongodb\b", r"mongoerror", r"mongoose"], None),
+]
+# admin/ops tools — หลายตัวรั่วเวอร์ชันผ่าน header/footer (เช่น X-Jenkins)
+TOOL_SIGS = [
+    ("phpMyAdmin", [r"phpmyadmin", r"pma_", r"pmauser"], r"phpmyadmin[^\d]{0,14}(\d+\.\d+\.\d+)"),
+    ("Adminer", [r"\badminer\b"], r"adminer[^\d]{0,10}(\d+\.\d+\.\d+)"),
+    ("phpPgAdmin", [r"phppgadmin"], None),
+    ("phpinfo()", [r"phpinfo\(\)", r"<title>phpinfo"], None),
+    ("Jenkins", [r"x-jenkins", r"\bjenkins\b"], r"x-jenkins[^\d]{0,6}(\d+\.\d+(?:\.\d+)?)"),
+    ("Grafana", [r"\bgrafana\b"], None),
+    ("Kibana", [r"\bkibana\b"], None),
+]
+# JavaScript libraries ฝั่ง client (มี CVE ของตัวเอง เช่น jQuery เก่า XSS) — จาก asset URL/ความคิดเห็นใน JS
+JSLIB_SIGS = [
+    ("jQuery", r"jquery[.\-/]?(?:ui[.\-]?)?v?(\d+\.\d+\.\d+)(?:\.min)?\.js"),
+    ("jQuery", r"jquery[^\"'<>]{0,40}?[?&]ver=(\d+\.\d+\.\d+)"),
+    ("jQuery", r"/\*!?\s*jQuery\s+v(\d+\.\d+\.\d+)"),
+    ("Bootstrap", r"bootstrap[.\-/]?v?(\d+\.\d+\.\d+)(?:\.min)?\.(?:js|css)"),
+    ("Bootstrap", r"bootstrap[^\"'<>]{0,40}?[?&]ver=(\d+\.\d+\.\d+)"),
+    ("Vue", r"vue[.\-/]?v?(\d+\.\d+\.\d+)(?:\.min)?\.js"),
+    ("React", r"react[.\-/]?v?(\d+\.\d+\.\d+)(?:\.min)?\.js"),
+    ("AngularJS", r"angular[.\-/]?v?(\d+\.\d+\.\d+)(?:\.min)?\.js"),
+    ("Lodash", r"lodash[.\-/]?v?(\d+\.\d+\.\d+)(?:\.min)?\.js"),
+]
+
+def _extract_components(fp, blob_low, blob, body):
+    """ตรวจ DB/admin tool/JS library จาก blob (header+cookie+body) และสะสมเข้า fp['components']
+    เรียกได้ทั้งตอน fingerprint และระหว่าง crawl ทุกหน้า (ครอบคลุมกว่า)"""
+    comps = fp.setdefault("components", [])
+
+    def _add(typ, nm, ver, src):
+        for c in comps:
+            if c["type"] == typ and c["name"] == nm:
+                if ver and not c.get("version"):
+                    c["version"], c["source"] = ver, src
+                return
+        comps.append({"type": typ, "name": nm, "version": ver or "", "source": src})
+
+    for nm, sigs, ver_re in DB_SIGS:
+        if any(re.search(s, blob_low) for s in sigs):
+            vm = re.search(ver_re, blob, re.I) if ver_re else None
+            _add("Database", nm, vm.group(1) if vm else "", "error/signature")
+    for nm, sigs, ver_re in TOOL_SIGS:
+        if any(re.search(s, blob_low) for s in sigs):
+            vm = re.search(ver_re, blob, re.I) if ver_re else None
+            _add("Tool", nm, vm.group(1) if vm else "", "signature")
+    for nm, ver_re in JSLIB_SIGS:
+        jm = re.search(ver_re, body or "", re.I)
+        if jm:
+            _add("JS Library", nm, jm.group(1), "asset")
+
+
 CMS_PATTERNS = [
     ("WordPress", [r"/wp-content/", r"/wp-includes/", r"/wp-json/"]),
     ("Drupal", [r"/sites/default/", r"/sites/all/"]),
@@ -863,7 +930,7 @@ def _fingerprint(session, base, prefix, timeout, verbose=False):
           "nodejs_detected": False, "nodejs_versions": [],
           "nodejs_frameworks": [], "cdn_proxy": None, "headers": {},
           "os_version": "", "modules": {}, "device": None, "device_version": "",
-          "device_category": "", "container_layers": []}
+          "device_category": "", "container_layers": [], "components": []}
     node_vers, node_fws = set(), set()
     php_ev = set()
 
@@ -964,6 +1031,9 @@ def _fingerprint(session, base, prefix, timeout, verbose=False):
         for name, sigs in CONTAINER_SIGS:
             if name not in fp["container_layers"] and any(re.search(s, dev_blob_low) for s in sigs):
                 fp["container_layers"].append(name)
+
+        # ── Component detection: Database (ทางอ้อม), admin tools, JS libraries ──
+        _extract_components(fp, dev_blob_low, dev_blob, body_head)
 
         # ตรวจจับ CDN / Reverse Proxy ที่คั่นหน้าเซิร์ฟเวอร์จริง
         hdr_keys = {k.lower() for k in r.headers.keys()}
@@ -1147,6 +1217,9 @@ APP_EOL_MAJOR = {
     "Drupal":    (10, "Drupal < 10 สิ้นสุดการสนับสนุนแล้ว (สาขา 7 / 8 / 9 EOL)"),
     "Nextcloud": (26, "Nextcloud < 26 เป็นรุ่นเก่า (แต่ละ major รองรับราว 1 ปี) ควรตรวจสถานะแพตช์"),
 }
+# เพดาน major ที่ "มีอยู่จริง" (ต.ค. 2026) — ถ้าตรวจพบสูงกว่านี้แปลว่าเวอร์ชันถูกปลอม/ซ่อน
+# (เช่น ปลั๊กอิน hardening แก้ meta generator) — scanner ควรเตือนว่าเลขไม่น่าเชื่อถือ
+APP_MAX_PLAUSIBLE = {"WordPress": 6, "Joomla": 5, "Drupal": 11, "Moodle": 4}
 
 
 def _detect_app_versions(session, base, prefix, timeout, cms, root_html="", meta_gen=""):
@@ -1234,6 +1307,21 @@ def _analyze_apps(cms_info):
     eol = APP_EOL_MAJOR.get(product)
     key = f"APP-{product}"
     src = app.get("source", "")
+    ceiling = APP_MAX_PLAUSIBLE.get(product)
+    if ceiling and vt[0] > ceiling:
+        # เวอร์ชันสูงเกินกว่าที่มีอยู่จริง → ถูกปลอม/ซ่อน ต้องยืนยันของจริง
+        out[key] = {
+            "cve": key, "name": f"{product} {vs} — เวอร์ชันไม่น่าเป็นจริง (อาจถูกปลอม)",
+            "severity": "Low", "trigger": "ตรวจความสมเหตุสมผลของเลขเวอร์ชัน",
+            "host_check": f"ยืนยันเวอร์ชัน {product} จริงบนเครื่อง (อย่าเชื่อ meta generator)",
+            "status": "unknown",
+            "reason": (f"ตรวจพบ {product} {vs} (จาก {src}) แต่สาขาสูงสุดที่มีจริงคือ {ceiling}.x "
+                       f"— เลขนี้น่าจะถูกปลอม/ซ่อน (เช่น ปลั๊กอิน hardening) ต้องยืนยันเวอร์ชันจริงบนเครื่องก่อนประเมิน CVE"),
+        }
+        plugins = app.get("plugins") or []
+        if plugins:
+            out[key]["reason"] += f" | ปลั๊กอินที่พบ: " + ", ".join(f"{p['slug']} {p['version']}" for p in plugins[:10])
+        return out
     if eol and vt[0] < eol[0]:
         out[key] = {
             "cve": key, "name": f"{product} {vs} — รุ่นเก่า/สิ้นสุดการสนับสนุน",
@@ -1280,6 +1368,32 @@ def _analyze_device(fp):
     return out
 
 
+def _analyze_components(fp):
+    """finding จาก Database / admin tools / JS libraries ที่ตรวจพบ (เวอร์ชัน → hook online CVE)"""
+    out = {}
+    for comp in fp.get("components") or []:
+        typ, nm = comp["type"], comp["name"]
+        ver, src = comp.get("version", ""), comp.get("source", "")
+        key = f"COMP-{typ}-{nm}".replace(" ", "")
+        exposed_tool = typ == "Tool" and nm in ("phpMyAdmin", "Adminer", "phpinfo()", "phpPgAdmin")
+        sev = "Medium" if exposed_tool else ("Low" if ver else "Info")
+        status = "vulnerable-conditions" if exposed_tool else "unknown"
+        reason = f"ตรวจพบ {typ}: {nm}" + (f" {ver}" if ver else " (เวอร์ชันไม่ทราบ)") + f" (จาก {src})"
+        if exposed_tool:
+            reason += " — เครื่องมือจัดการที่เข้าถึงได้จากภายนอก ควรจำกัด IP/ปิดถ้าไม่จำเป็น"
+        elif typ == "Database":
+            reason += " — เห็นผ่าน error/tool (ไม่ได้ต่อ DB ตรง) ควรปิด error ที่รั่วและตรวจเวอร์ชัน DB บนเครื่อง"
+        elif ver:
+            reason += " — ควรตรวจ CVE ของเวอร์ชันนี้ (online lookup ช่วยได้)"
+        out[key] = {
+            "cve": key, "name": f"{nm}{(' ' + ver) if ver else ''} — {typ}",
+            "severity": sev, "trigger": "ตรวจพบส่วนประกอบ",
+            "host_check": f"ตรวจ/อัปเดต {nm}" + (" และจำกัดการเข้าถึง" if exposed_tool else ""),
+            "status": status, "reason": reason,
+        }
+    return out
+
+
 def _stack_profile(fp, cms_info):
     """สรุปสแตกเป็นชั้น ๆ สำหรับแสดงผล: OS → device → server → container → runtime → app"""
     layers = []
@@ -1305,6 +1419,9 @@ def _stack_profile(fp, cms_info):
         layers.append(cms_info["cms"])
     if app.get("plugins"):
         layers.append(f"+{len(app['plugins'])} WP plugin")
+    for comp in fp.get("components", []):
+        if comp["type"] in ("Database", "Tool"):
+            layers.append(f"{comp['name']}" + (f" {comp['version']}" if comp.get("version") else ""))
     return layers
 
 
@@ -1328,6 +1445,19 @@ CIRCL_MAP = {
     "QNAP QTS": ("qnap", "qts"),
     "pfSense": ("netgate", "pfsense"),
     "MikroTik RouterOS": ("mikrotik", "routeros"),
+    # ส่วนประกอบอื่น ๆ (DB / JS libs / tools)
+    "MySQL/MariaDB": ("oracle", "mysql"),
+    "MariaDB": ("mariadb", "mariadb"),
+    "PostgreSQL": ("postgresql", "postgresql"),
+    "jQuery": ("jquery", "jquery"),
+    "Bootstrap": ("getbootstrap", "bootstrap"),
+    "Vue": ("vuejs", "vue"),
+    "AngularJS": ("angularjs", "angular.js"),
+    "Lodash": ("lodash", "lodash"),
+    "phpMyAdmin": ("phpmyadmin", "phpmyadmin"),
+    "Adminer": ("adminer", "adminer"),
+    "Jenkins": ("jenkins", "jenkins"),
+    "Grafana": ("grafana", "grafana"),
 }
 _ONLINE_CVE_CACHE = {}  # memo per (vendor, product) ภายใน process เพื่อไม่ยิงซ้ำ
 
@@ -1348,22 +1478,58 @@ def _vcmp(a, b):
     return (a > b) - (a < b)
 
 
+def _ocve_text_range(vt, raw):
+    """เทียบ vt กับช่วงเวอร์ชันที่เขียนเป็นข้อความอิสระใน field `version`
+    เช่น '>= 1.12.0, < 3.5.0', 'All versions prior to version 1.9.0', 'before 2.0' """
+    low = (raw or "").lower().strip()
+    bounds = []  # (op, version_tuple)
+    for pat, op in ((r"prior to(?:\s+version)?\s*v?([\d.]+)", "lt"),
+                    (r"before\s*v?([\d.]+)", "lt"),
+                    (r"up to and including\s*v?([\d.]+)", "le"),
+                    (r"up to\s*v?([\d.]+)", "lt"),
+                    (r"through\s*v?([\d.]+)", "le")):
+        mm = re.search(pat, low)
+        if mm:
+            bounds.append((op, _parse_ver(mm.group(1))))
+    for mm in re.finditer(r"(>=|<=|>|<|=)\s*v?([\d.]+)", low):
+        op = {">=": "ge", "<=": "le", ">": "gt", "<": "lt", "=": "eq"}[mm.group(1)]
+        bounds.append((op, _parse_ver(mm.group(2))))
+    if not bounds:
+        # ข้อความเป็นเลขเวอร์ชันเดี่ยว ๆ → ตีความว่ากระทบเฉพาะรุ่นนั้น
+        if re.fullmatch(r"v?[\d.]+", low):
+            bv = _parse_ver(low)
+            if bv:
+                bounds.append(("eq", bv))
+    if not bounds:
+        return False
+    for op, bt in bounds:
+        if not bt:
+            return False
+        c = _vcmp(vt, bt)
+        if (op == "ge" and c < 0) or (op == "gt" and c <= 0) or \
+           (op == "le" and c > 0) or (op == "lt" and c >= 0) or (op == "eq" and c != 0):
+            return False
+    return True
+
+
 def _ocve_in_affected(vt, versions):
-    """vt อยู่ในช่วงกระทบของ affected[].versions (รูปแบบ CVE 5.0: version/lessThan/lessThanOrEqual)"""
+    """vt อยู่ในช่วงกระทบของ affected[].versions — รองรับทั้งรูปแบบ structured
+    (version/lessThan/lessThanOrEqual) และช่วงเวอร์ชันที่เขียนเป็นข้อความอิสระใน version"""
     for v in versions or []:
         if (v.get("status") or "affected") != "affected":
             continue
-        raw_lo = v.get("version")
-        lo = _parse_ver(raw_lo) if raw_lo not in (None, "0", "*", "") else None
+        raw = (v.get("version") or "").strip()
         lt = _parse_ver(v.get("lessThan")) if v.get("lessThan") else None
         lte = _parse_ver(v.get("lessThanOrEqual")) if v.get("lessThanOrEqual") else None
-        if lt is None and lte is None:
-            if lo and _vcmp(vt, lo) == 0:   # ระบุเวอร์ชันเดียวเป๊ะ
+        if lt is not None or lte is not None:
+            lo = _parse_ver(raw) if raw not in ("", "0", "*") else None
+            ok_lo = (lo is None) or _vcmp(vt, lo) >= 0
+            ok_hi = (lt is not None and _vcmp(vt, lt) < 0) or (lte is not None and _vcmp(vt, lte) <= 0)
+            if ok_lo and ok_hi:
                 return True
             continue
-        ok_lo = (lo is None) or _vcmp(vt, lo) >= 0
-        ok_hi = (lt is not None and _vcmp(vt, lt) < 0) or (lte is not None and _vcmp(vt, lte) <= 0)
-        if ok_lo and ok_hi:
+        # ไม่มี field structured → ลองตีความช่วงจากข้อความใน version
+        if raw and _ocve_text_range(vt, raw):
             return True
     return False
 
@@ -1453,6 +1619,10 @@ def _online_cve_scan(fp, cms_info, opts):
     app = (cms_info or {}).get("app") or {}
     if app.get("product") in CIRCL_MAP and app.get("version"):
         comps.append((app["product"], app["version"]))
+    # ส่วนประกอบอื่น ๆ ที่มีเวอร์ชัน (DB / JS libs / tools)
+    for comp in fp.get("components", []):
+        if comp.get("version") and comp.get("name") in CIRCL_MAP:
+            comps.append((comp["name"], _parse_ver(comp["version"])))
 
     timeout = min(float(opts.get("timeout", 8.0)) + 5, 15)
     for name, vt in comps:
@@ -1554,6 +1724,11 @@ def _crawl(session, base, prefix, max_depth, max_pages, timeout, verbose=False, 
             fw_tag = f"Next.js {m.group(1)}"
             if fw_tag not in fp.get("nodejs_frameworks", []):
                 fp.setdefault("nodejs_frameworks", []).append(fw_tag)
+        # component detection ระหว่าง crawl (DB error / admin tool / JS lib จากหน้าอื่น ๆ)
+        c_all_hdr = " ".join(f"{k}: {v}" for k, v in resp.headers.items())
+        c_sc = resp.headers.get("Set-Cookie", "") or ""
+        c_blob = f"{c_all_hdr}\n{c_sc}\n{txt_head}"
+        _extract_components(fp, c_blob.lower(), c_blob, txt_head)
 
     try:
         r0 = session.get(base + "/rmutcert-nonexist-" + uuid.uuid4().hex[:6],
@@ -2639,6 +2814,7 @@ def scan_single_target(target_str, opts, idx=1, total=1):
             fp.setdefault("php_evidence", []).append(f"CMS:{cms_info['cms']}")
     app_cves = _analyze_apps(cms_info)
     device_cves = _analyze_device(fp)
+    component_cves = _analyze_components(fp)
     fp["stack_layers"] = _stack_profile(fp, cms_info)
     _v and fp["stack_layers"] and print(f"    Stack: {' → '.join(fp['stack_layers'])}")
     online_cves = _online_cve_scan(fp, cms_info, opts)
@@ -2699,11 +2875,11 @@ def scan_single_target(target_str, opts, idx=1, total=1):
              ([cve_115560] if cve_115560 else []) +
              list(nodejs_cves.values()) + list(gitlab_cves.values()) +
              list(app_cves.values()) + list(device_cves.values()) +
-             list(online_cves.values()))
+             list(component_cves.values()) + list(online_cves.values()))
 
     if selected:
         all_r = [r for r in all_r if r.get("cve") in selected
-                 or r.get("cve", "").startswith(("UNSUPPORTED-", "APP-", "DEVICE-", "ONLINE-"))]
+                 or r.get("cve", "").startswith(("UNSUPPORTED-", "APP-", "DEVICE-", "COMP-", "ONLINE-"))]
     vuln_cnt = sum(1 for r in all_r if r["status"] in ("vulnerable", "high-risk", "likely-vulnerable", "unpatched"))
     warn_cnt = sum(1 for r in all_r if r["status"] in ("medium-risk", "vulnerable-version", "vulnerable-conditions"))
     crit = vuln_cnt + warn_cnt
@@ -2736,6 +2912,8 @@ def scan_single_target(target_str, opts, idx=1, total=1):
         "nginx_cves": nginx_cves, "php_cves": php_cves,
         "cve_115560": cve_115560, "nodejs_cves": nodejs_cves,
         "gitlab_cves": gitlab_cves,
+        "app_cves": app_cves, "device_cves": device_cves,
+        "component_cves": component_cves, "online_cves": online_cves,
         "summary": {"total_cves": len(all_r), "detected": crit,
                     "vulnerable": vuln_cnt, "warning": warn_cnt,
                     "critical": crit, "safe": safe, "unknown": unknown},
@@ -4579,6 +4757,14 @@ def _host_findings(h):
         out.append({**d, "category": "Node.js", "target": tgt})
     for _cve, d in (h.get("gitlab_cves") or {}).items():
         out.append({**d, "category": "GitLab", "target": tgt})
+    for _cve, d in (h.get("app_cves") or {}).items():
+        out.append({**d, "category": "App", "target": tgt})
+    for _cve, d in (h.get("device_cves") or {}).items():
+        out.append({**d, "category": "Device", "target": tgt})
+    for _cve, d in (h.get("component_cves") or {}).items():
+        out.append({**d, "category": "Component", "target": tgt})
+    for _cve, d in (h.get("online_cves") or {}).items():
+        out.append({**d, "category": "Online CVE", "target": tgt})
     return out
 
 
