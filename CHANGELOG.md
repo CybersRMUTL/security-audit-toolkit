@@ -7,8 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
-- LAN mode for internal-network scanning (`--lan`, interactive prompt, and
-  auto-enabled for private-IP targets). Raises accuracy on the LAN: `nmap -O`
+- LAN mode for internal-network scanning, chosen up front from a scan-mode
+  menu (Auto / External / LAN) — also `--lan`, and still auto-enabled for
+  private-IP targets in Auto. External forces remote behaviour even for a
+  private IP. Raises accuracy on the LAN: `nmap -O`
   uses ARP discovery (and harvests MAC + vendor), MAC/OUI vendor lookup runs
   without the online-CVE opt-in (ARP cache primed with a ping), and the TTL
   heuristic is labelled high-confidence at 0–1 hop. The ThaiCERT 8-group

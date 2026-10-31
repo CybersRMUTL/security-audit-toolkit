@@ -3312,8 +3312,16 @@ def scan_single_target(target_str, opts, idx=1, total=1):
         _resolved_ip = _ip_list[0] if _ip_list else ""
     except Exception:
         _resolved_ip = ""
-    _lan = bool(opts.get("lan_mode")) or (_is_private_ip(_resolved_ip) is True)
+    # โหมดสแกน: auto (ดีฟอลต์—เปิด LAN เองเมื่อ IP ภายใน) / lan (บังคับเปิด) / external (บังคับปิด)
+    _sm = opts.get("scan_mode", "auto")
+    if _sm == "lan" or opts.get("lan_mode"):
+        _lan = True
+    elif _sm == "external":
+        _lan = False
+    else:  # auto
+        _lan = (_is_private_ip(_resolved_ip) is True)
     fp["lan_mode"] = _lan
+    fp["scan_mode"] = _sm
     _lan and _v and print(f"    🏠 โหมด LAN: เปิด (nmap -O/ARP + MAC/OUI + TTL เชื่อมั่นสูงขึ้น)")
     _probe_os(urlparse(base).hostname or "", fp, opts["timeout"], lan=_lan)
     # MAC + ผู้ผลิต (เฉพาะเป้าหมายในวง LAN เดียวกัน — IP ส่วนตัว); โหมด LAN prime ARP + OUI เสมอ
@@ -7142,6 +7150,9 @@ def _build_pdf(data, charts, output_path, font):
                ["ระยะเวลาสแกน", (f"{int(meta['duration'])} วินาที" if meta.get("duration") else "ไม่ได้บันทึก")]]
     o = meta.get("opts") or {}
     if o:
+        _smode = {"lan": "LAN (เครือข่ายภายใน)", "external": "ภายนอก (External)",
+                  "auto": "อัตโนมัติ (auto)"}.get(o.get("scan_mode", "auto"), "อัตโนมัติ (auto)")
+        sm_rows.append(["โหมดสแกน", _smode])
         sm_rows.append(["พารามิเตอร์", f"threads={o.get('target_threads','-')} · depth={o.get('depth','-')} "
                         f"· max_pages={o.get('max_pages','-')} · timeout={o.get('timeout','-')}s "
                         f"· crawl_budget={o.get('crawl_budget','-')}s · skip_lfi={o.get('skip_lfi','-')}"])
@@ -10222,6 +10233,21 @@ def ask_int(prompt, default, min_v=None, max_v=None):
     return int(ask(prompt, default, validator=val))
 
 
+def ask_scan_mode():
+    """เมนูเลือกโหมดการสแกนตั้งแต่ต้น — คืน 'auto' | 'external' | 'lan'"""
+    section("เลือกโหมดการสแกน (Scan Mode)")
+    return ask_choice(
+        "จะสแกนจากตำแหน่งใด?",
+        [("auto", "อัตโนมัติ (แนะนำ)",
+          "เปิดโหมด LAN เองเมื่อเป้าหมายเป็น IP ภายใน (192.168/10/172.16-31) ไม่งั้นใช้โหมดภายนอก"),
+         ("external", "ภายนอก (External · remote unauthenticated)",
+          "สแกนเสมือนจากนอกเครือข่าย — ไม่ใช้ nmap -O/ARP/MAC (เพดานความสามารถเฉลี่ย ~55%)"),
+         ("lan", "เครือข่ายภายใน (LAN · internal)",
+          "บังคับ nmap -O/ARP + MAC/OUI + TTL เชื่อมั่นสูง — แม่นขึ้นมากกับ NAS/กล้อง/Network/Windows "
+          "(เฉพาะเป้าหมายในวง LAN เดียวกัน · เพดานเฉลี่ย ~66%)")],
+        default="auto")
+
+
 def ask_choice(prompt, choices, default=None):
     print(f"  {prompt}")
     print()
@@ -10697,6 +10723,9 @@ def menu_scan():
             "target_threads": 3, "lfi_threads": 5, "rate": 5.0,
             "skip_lfi": False, "verbose": False, "no_verify_ssl": False, "online_cve": False, "lan_mode": False}
 
+    # ── เลือกโหมดการสแกนตั้งแต่ต้น: อัตโนมัติ / ภายนอก / LAN ──
+    opts["scan_mode"] = ask_scan_mode()
+
     if ask_yn("ตั้งค่าการสแกนขั้นสูง (Threads / Crawl Depth / Skip LFI)?", False):
         opts["target_threads"] = ask_int("Threads", 3, 1, 30)
         opts["depth"] = ask_int("Crawl depth", _SCAN_DEPTH, 1, 20)
@@ -10706,8 +10735,6 @@ def menu_scan():
         opts["skip_lfi"] = ask_yn("Skip LFI scan?", False)
         opts["verbose"] = ask_yn("Verbose?", False)
         opts["online_cve"] = ask_yn("ค้น CVE ออนไลน์ (CIRCL) ตามเวอร์ชันที่พบ? [ต้องต่อเน็ต]", False)
-        opts["lan_mode"] = ask_yn("บังคับโหมด LAN (nmap -O/ARP + MAC/OUI + TTL แม่นขึ้น)? "
-                                  "[เปิดเองอยู่แล้วถ้าเป้าหมายเป็น IP ภายใน]", False)
 
     # ── แสดง CVE + ขอบเขต ก่อนสแกน ──
     if not confirm_scan_scope(scope, opts):
@@ -11098,6 +11125,9 @@ def menu_pipeline():
             "target_threads": default_threads, "lfi_threads": 5, "rate": 5.0,
             "skip_lfi": False, "verbose": False, "no_verify_ssl": False, "online_cve": False, "lan_mode": False}
 
+    # ── เลือกโหมดการสแกนตั้งแต่ต้น: อัตโนมัติ / ภายนอก / LAN ──
+    opts["scan_mode"] = ask_scan_mode()
+
     if ask_yn("ตั้งค่าการสแกนขั้นสูง (Threads / Crawl Depth / Skip LFI)?", False):
         opts["target_threads"] = ask_int("Threads", default_threads, 1, 30)
         opts["depth"] = ask_int("Crawl depth", _SCAN_DEPTH, 1, 20)
@@ -11107,8 +11137,6 @@ def menu_pipeline():
         opts["skip_lfi"] = ask_yn("Skip LFI scan?", False)
         opts["verbose"] = ask_yn("Verbose?", False)
         opts["online_cve"] = ask_yn("ค้น CVE ออนไลน์ (CIRCL) ตามเวอร์ชันที่พบ? [ต้องต่อเน็ต]", False)
-        opts["lan_mode"] = ask_yn("บังคับโหมด LAN (nmap -O/ARP + MAC/OUI + TTL แม่นขึ้น)? "
-                                  "[เปิดเองอยู่แล้วถ้าเป้าหมายเป็น IP ภายใน]", False)
 
     if not confirm_scan_scope(scope, opts):
         print(c("  ยกเลิก", C.YEL))
