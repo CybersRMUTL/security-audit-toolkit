@@ -1544,9 +1544,9 @@ def _detect_waf(fp):
     return None
 
 
-def _probe_tls(host, port, timeout):
+def _probe_tls(host, port, timeout, fp=None):
     """ตรวจ TLS จริงด้วย handshake: cert หมดอายุ/ใกล้หมด/self-signed + รองรับโปรโตคอลอ่อน (TLS 1.0/1.1)
-    คืน {TLS-*: finding}"""
+    คืน {TLS-*: finding} และเขียนสรุปกลับเข้า fp (tls_version/cert_expiry/cert_days_left/cert_problem)"""
     import ssl
     import socket as _sk
     out = {}
@@ -1563,8 +1563,12 @@ def _probe_tls(host, port, timeout):
         with _sk.create_connection((host, port), timeout=t) as s:
             with ctx.wrap_socket(s, server_hostname=host) as ss:
                 cert = ss.getpeercert()
+                if fp is not None:
+                    fp["tls_version"] = ss.version()
     except ssl.SSLCertVerificationError as e:
         verify_err = str(e)
+        if fp is not None:
+            fp["cert_problem"] = str(e)
     except Exception:
         return out  # เชื่อมต่อ TLS ไม่ได้ (อาจไม่ใช่ HTTPS) — ข้าม
 
@@ -1600,6 +1604,9 @@ def _probe_tls(host, port, timeout):
     if na:
         try:
             days = (ssl.cert_time_to_seconds(na) - time.time()) / 86400.0
+            if fp is not None:
+                fp["cert_expiry"] = na
+                fp["cert_days_left"] = int(days)
             if days < 0:
                 _finding("TLS-Expired", "ใบรับรอง TLS หมดอายุ", "High", "vulnerable",
                          f"ใบรับรองหมดอายุแล้ว (notAfter {na})", "ต่ออายุใบรับรองทันที")
@@ -3139,7 +3146,7 @@ def scan_single_target(target_str, opts, idx=1, total=1):
     tls_cves = {}
     if base.startswith("https://"):
         _tp = urlparse(base)
-        tls_cves = _probe_tls(_tp.hostname or "", _tp.port or 443, opts["timeout"])
+        tls_cves = _probe_tls(_tp.hostname or "", _tp.port or 443, opts["timeout"], fp=fp)
     fp["stack_layers"] = _stack_profile(fp, cms_info)
     _v and fp["stack_layers"] and print(f"    Stack: {' → '.join(fp['stack_layers'])}")
     online_cves = _online_cve_scan(fp, cms_info, opts)
@@ -5170,12 +5177,20 @@ def _extract_data(json_data):
         _impact = [x for x in f if _bucket_of(x.get("status")) in ("vulnerable", "warning")]
         max_cvss = max([_cvss(x) for x in _impact], default=0.0)
         max_epss = max([_epss(x) for x in _impact], default=0.0)
+        _app = (r.get("cms", {}) or {}).get("app") or {}
+        if _app.get("product"):
+            _cms_disp = f"{_app['product']} {_app.get('version_str', '')}".strip()
+        else:
+            _cms_disp = (r.get("cms", {}) or {}).get("cms", "-") or "-"
         return {"target": r.get("target", ""), "host": lbl, "ip": r.get("ip", ""),
                 "reachable": True, "counts": counts, "risk_score": score,
                 "risk_level": _risk_level(score, counts),
                 "server": (f"{fp.get('server_family', '?')} {fp.get('server_version', '')}".strip() or "?"),
                 "php": ", ".join(fp.get("php_versions", [])) or "-",
-                "cms": (r.get("cms", {}) or {}).get("cms", "-"),
+                "cms": _cms_disp,
+                "stack": fp.get("stack_layers", []) or [],
+                "waf": fp.get("waf") or "",
+                "device": fp.get("device") or "",
                 "lfi": len(r.get("lfi_findings", []) or []), "max_cvss": max_cvss, "max_epss": max_epss,
                 "crit_asset": _asset_crit(lbl), "hdr": _audit_headers(fp),
                 "tls_version": fp.get("tls_version"), "cert_days_left": fp.get("cert_days_left"),
@@ -6729,17 +6744,45 @@ def _build_pdf(data, charts, output_path, font):
     story.append(Spacer(1, 0.4 * cm))
 
     fp = data["fingerprint"]
-    story.append(P("ลายนิ้วมือระบบ" + (" (ตัวอย่างจากโฮสต์แรกที่เข้าถึงได้)" if multi else ""), h2))
-    fp_rows = [["ระบบปฏิบัติการ", fp.get("os", "ไม่ทราบ")],
-               ["เว็บเซิร์ฟเวอร์", f"{fp.get('server_family', 'ไม่ทราบ')} {fp.get('server_version', '')}".strip()],
-               ["SAPI", fp.get("sapi", "ไม่ทราบ")],
-               ["เวอร์ชัน PHP", ", ".join(fp.get("php_versions", [])) or "ไม่พบ"],
-               ["รองรับ HTTP/3", "ใช่" if fp.get("http3_hint") else "ไม่พบสัญญาณ"],
-               ["เวอร์ชัน TLS", fp.get("tls_version", "ไม่ได้ตรวจ")],
-               ["ใบรับรองหมดอายุ", (f"{fp.get('cert_expiry')} (เหลือ {fp.get('cert_days_left')} วัน)"
-                                     if fp.get("cert_expiry") else
-                                     ("ตรวจสอบไม่ผ่าน" if fp.get("cert_problem") else "ไม่ได้ตรวจ"))],
-               ["CMS", data.get("cms", {}).get("cms", "ไม่พบ")]]
+    app = (data.get("cms") or {}).get("app") or {}
+    story.append(P("ลายนิ้วมือระบบ (Stack Fingerprint)" + (" (ตัวอย่างจากโฮสต์แรกที่เข้าถึงได้)" if multi else ""), h2))
+    fp_rows = []
+    if fp.get("stack_layers"):
+        fp_rows.append(["โปรไฟล์สแตก (ชั้น)", "  →  ".join(fp["stack_layers"])])
+    fp_rows += [["ระบบปฏิบัติการ", fp.get("os_version") or fp.get("os", "ไม่ทราบ")],
+                ["เว็บเซิร์ฟเวอร์", f"{fp.get('server_family', 'ไม่ทราบ')} {fp.get('server_version', '')}".strip()],
+                ["SAPI", fp.get("sapi", "ไม่ทราบ")],
+                ["เวอร์ชัน PHP", ", ".join(fp.get("php_versions", [])) or "ไม่พบ"]]
+    if fp.get("modules"):
+        fp_rows.append(["โมดูลเซิร์ฟเวอร์", ", ".join(f"{k}/{v}" for k, v in fp["modules"].items())])
+    if fp.get("waf") or fp.get("cdn_proxy"):
+        fp_rows.append(["WAF / CDN", " / ".join(x for x in [fp.get("waf"), fp.get("cdn_proxy")] if x)])
+    if fp.get("device"):
+        _dv = f"{fp['device']} {fp.get('device_version', '')}".strip()
+        if fp.get("device_category"):
+            _dv += f" ({fp['device_category']})"
+        fp_rows.append(["อุปกรณ์/แพลตฟอร์ม", _dv])
+    if fp.get("container_layers"):
+        fp_rows.append(["Container / Proxy", ", ".join(fp["container_layers"])])
+    if app.get("product"):
+        _av = f"{app['product']} {app.get('version_str', '')}".strip()
+        if app.get("plugins"):
+            _av += f" · {len(app['plugins'])} ปลั๊กอิน"
+        fp_rows.append(["แอป / CMS", _av])
+    else:
+        fp_rows.append(["CMS", data.get("cms", {}).get("cms", "ไม่พบ")])
+    if fp.get("components"):
+        fp_rows.append(["ส่วนประกอบอื่น (DB/JS/tool)",
+                        ", ".join(f"{c['name']}{(' ' + c['version']) if c.get('version') else ''}"
+                                  for c in fp["components"][:8])])
+    if fp.get("composer_packages"):
+        fp_rows.append(["แพ็กเกจ composer", f"{len(fp['composer_packages'])} แพ็กเกจ (จาก composer.lock ที่เปิดเผย)"])
+    fp_rows += [["รองรับ HTTP/3", "ใช่" if fp.get("http3_hint") else "ไม่พบสัญญาณ"],
+                ["เวอร์ชัน TLS", fp.get("tls_version", "ไม่ได้ตรวจ")],
+                ["ใบรับรอง TLS", (f"{fp.get('cert_expiry')} (เหลือ {fp.get('cert_days_left')} วัน)"
+                                   if fp.get("cert_expiry") else
+                                   (f"ตรวจสอบไม่ผ่าน: {str(fp.get('cert_problem'))[:60]}"
+                                    if fp.get("cert_problem") else "ไม่ได้ตรวจ"))]]
     t = Table([[P(a, cellb), P(b, cell)] for a, b in fp_rows], colWidths=[5 * cm, 11 * cm])
     t.setStyle(TableStyle([("LINEBELOW", (0, 0), (-1, -1), 0.4, colors.HexColor("#d9dce6")),
                            ("BACKGROUND", (0, 0), (0, -1), RMUT_LIGHT), ("TEXTCOLOR", (0, 0), (0, -1), RMUT_BLUE),
@@ -7347,6 +7390,7 @@ def _build_html_dashboard(data, path):
 
     hosts_js = [{"host": h["host"], "ip": h.get("ip", ""), "reachable": h["reachable"],
                  "server": h["server"] or "", "php": h["php"] or "", "cms": h["cms"] or "",
+                 "stack": h.get("stack", []), "waf": h.get("waf", ""), "device": h.get("device", ""),
                  "lfi": h["lfi"], "score": h["risk_score"], "maxcvss": h.get("max_cvss", 0),
                  "level": h["risk_level"], **h["counts"],
                  "hdr": h.get("hdr", {}),
