@@ -3675,11 +3675,83 @@ def _hlabel(t):
     return t.replace("https://", "").replace("http://", "").rstrip("/")[:40]
 
 
+# พอร์ตเว็บ/อุปกรณ์ที่ใช้ "เคาะ" หาโฮสต์มีชีวิต (TCP connect — ไม่พึ่ง ICMP จึงใช้ได้แม้ปิดปิง)
+_DISCOVER_PORTS = [80, 443, 8080, 8443]
+_DISCOVER_PORTS_LAN = [80, 443, 8080, 8443, 8000, 8081, 5000, 5001, 7001, 10000, 81, 9000]
+
+
+def _host_alive(target, ports, timeout):
+    """เคาะ TCP ไปยังพอร์ตเว็บ/อุปกรณ์ — คืน (alive, open_port|None)
+    ใช้ TCP connect (ไม่ใช้ ICMP) → ปิดปิงก็ยังตรวจเจอ; เจอพอร์ตเปิดพอร์ตแรกก็พอ"""
+    import socket
+    h = target.replace("https://", "").replace("http://", "").split("/")[0].split(":")[0]
+    try:
+        ip = socket.gethostbyname(h)
+    except Exception:
+        return False, None
+    for p in ports:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(timeout)
+        try:
+            if s.connect_ex((ip, p)) == 0:
+                return True, p
+        except Exception:
+            pass
+        finally:
+            s.close()
+    return False, None
+
+
+def _discover_alive(targets, opts):
+    """Host discovery แบบเร็ว: เคาะพอร์ตเว็บทุกเป้าหมายแบบขนานสูง แล้วคัดเฉพาะที่ 'มีพอร์ตเว็บเปิด'
+    ออกไป deep-scan — ข้ามไอพีตายโดยไม่ต้องรอ HTTP timeout 8s ต่อไอพี
+    คืน (alive_targets, dead_results) โดย dead ถูกบันทึกเป็น 'เข้าไม่ถึง' เพื่อให้ยอดรวมในรายงานตรง"""
+    lan = opts.get("scan_mode") == "lan"
+    ports = _DISCOVER_PORTS_LAN if lan else _DISCOVER_PORTS
+    dt = 0.6 if lan else 1.0
+    total = len(targets)
+    workers = min(128, max(8, total))
+    print(f"  🔎 Host discovery: เคาะพอร์ตเว็บ {ports} (TCP · ไม่พึ่งปิง) บน {total} เป้าหมาย "
+          f"ด้วย {workers} threads · timeout {dt}s/พอร์ต …")
+    alive, dead = [], []
+    done = {"n": 0}
+    dlock = Lock()
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futs = {ex.submit(_host_alive, t[0], ports, dt): t for t in targets}
+        for f in as_completed(futs):
+            t = futs[f]
+            try:
+                ok, _port = f.result()
+            except Exception:
+                ok = False
+            if ok:
+                alive.append(t)
+            else:
+                dead.append({"target": t[0], "reachable": False,
+                             "skipped_discovery": True, "_elapsed": 0,
+                             "error": "ไม่พบพอร์ตเว็บเปิด (ข้ามจาก host discovery)"})
+            with dlock:
+                done["n"] += 1
+                sys.stdout.write(f"\r\033[K  🔎 ตรวจแล้ว {done['n']}/{total} · พบมีชีวิต {len(alive)}")
+                sys.stdout.flush()
+    print(f"\r\033[K  ✅ Host discovery เสร็จ: มีพอร์ตเว็บเปิด {len(alive)}/{total} "
+          f"(ข้าม {len(dead)} ไอพีที่ไม่มีเว็บ) → สแกนเชิงลึกเฉพาะ {len(alive)} โฮสต์")
+    return alive, dead
+
+
 def run_scan(targets, opts):
     results = []
     total = len(targets)
     if total == 1:
         return [scan_single_target(targets[0][0], opts, 1, 1)]
+    # ── Host discovery ก่อน (เปิดเป็นค่าเริ่มต้นสำหรับ CIDR/หลายโฮสต์) — ข้ามไอพีตายอย่างรวดเร็ว ──
+    discovery_dead = []
+    if opts.get("discover") and total > 1:
+        targets, discovery_dead = _discover_alive(targets, opts)
+        total = len(targets)
+        if total == 0:
+            print("  ⚠ ไม่พบโฮสต์ที่มีพอร์ตเว็บเปิดเลย — ไม่มีอะไรให้สแกนเชิงลึก")
+            return discovery_dead
     state = {"done": 0, "reachable": 0, "crit": 0, "stop": False}
     inflight = {}            # label -> เวลาเริ่ม (ใช้บอกว่าโฮสต์ไหนกำลังค้าง)
     ilock = Lock()
@@ -3812,6 +3884,8 @@ def run_scan(targets, opts):
             sys.stdout.flush()
     print(f"  \u2705 สแกนเสร็จ {total} เป้าหมาย ใน {int(time.time()-start)}s "
           f"(เข้าถึงได้ {state['reachable']}, พบความเสี่ยง {state['crit']})")
+    # รวมไอพีที่ host discovery คัดออก (ไม่มีพอร์ตเว็บ) กลับเข้าผลลัพธ์ เพื่อให้ยอดรวมในรายงานตรงกับจำนวนที่ระบุ
+    results.extend(discovery_dead)
     return results
 
 
@@ -10724,7 +10798,8 @@ def menu_scan():
 
     opts = {"depth": _SCAN_DEPTH, "max_pages": _SCAN_MAX_PAGES, "timeout": 8.0,
             "target_threads": 3, "lfi_threads": 5, "rate": 5.0,
-            "skip_lfi": False, "verbose": False, "no_verify_ssl": False, "online_cve": False, "lan_mode": False}
+            "skip_lfi": False, "verbose": False, "no_verify_ssl": False, "online_cve": False,
+            "lan_mode": False, "discover": (mode != "single")}
 
     opts["scan_mode"] = _scan_mode
 
@@ -10737,6 +10812,8 @@ def menu_scan():
         opts["skip_lfi"] = ask_yn("Skip LFI scan?", False)
         opts["verbose"] = ask_yn("Verbose?", False)
         opts["online_cve"] = ask_yn("ค้น CVE ออนไลน์ (CIRCL) ตามเวอร์ชันที่พบ? [ต้องต่อเน็ต]", False)
+        if mode != "single":
+            opts["discover"] = ask_yn("Host discovery ก่อน (เคาะพอร์ตเว็บ ข้ามไอพีตาย — เร็วกว่ามากกับ CIDR)?", True)
 
     # ── แสดง CVE + ขอบเขต ก่อนสแกน ──
     if not confirm_scan_scope(scope, opts):
@@ -11127,7 +11204,8 @@ def menu_pipeline():
 
     opts = {"depth": _SCAN_DEPTH, "max_pages": _SCAN_MAX_PAGES, "timeout": 8.0,
             "target_threads": default_threads, "lfi_threads": 5, "rate": 5.0,
-            "skip_lfi": False, "verbose": False, "no_verify_ssl": False, "online_cve": False, "lan_mode": False}
+            "skip_lfi": False, "verbose": False, "no_verify_ssl": False, "online_cve": False,
+            "lan_mode": False, "discover": (mode != "single")}
 
     opts["scan_mode"] = _scan_mode
 
@@ -11339,6 +11417,9 @@ Examples:
     ap.add_argument("--lan", action="store_true",
                     help="LAN mode: force internal-network accuracy (nmap -O/ARP OS + MAC/OUI vendor + "
                          "higher TTL confidence). Auto-enabled for private-IP targets.")
+    ap.add_argument("--no-discover", action="store_true",
+                    help="Disable the fast TCP host-discovery pre-pass for CIDR/multi-host scans "
+                         "(by default dead IPs with no open web port are skipped before deep scanning).")
     args = ap.parse_args()
 
     global _OWN_TARGET, _SCAN_DEPTH, _SCAN_MAX_PAGES
@@ -11359,7 +11440,7 @@ Examples:
         opts = {"depth": _SCAN_DEPTH, "max_pages": _SCAN_MAX_PAGES, "timeout": args.timeout,
                 "target_threads": 1, "lfi_threads": 5, "rate": 5.0,
                 "skip_lfi": False, "verbose": False,
-                "no_verify_ssl": args.no_verify_ssl, "lan_mode": args.lan}
+                "no_verify_ssl": args.no_verify_ssl, "lan_mode": args.lan, "discover": not args.no_discover}
         results = run_scan([(args.target, "single")], opts)
         name = safe_name(args.target.replace("https://", "").replace("http://", "").replace("/", "_"))
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -11380,7 +11461,7 @@ Examples:
         opts = {"depth": _SCAN_DEPTH, "max_pages": _SCAN_MAX_PAGES, "timeout": args.timeout,
                 "target_threads": 3, "lfi_threads": 5, "rate": 5.0,
                 "skip_lfi": False, "verbose": False,
-                "no_verify_ssl": args.no_verify_ssl, "lan_mode": args.lan}
+                "no_verify_ssl": args.no_verify_ssl, "lan_mode": args.lan, "discover": not args.no_discover}
         results = run_scan(targets, opts)
         name = safe_name(args.cidr.replace("/", "_").replace(".", "_"))
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -11401,7 +11482,7 @@ Examples:
         opts = {"depth": _SCAN_DEPTH, "max_pages": _SCAN_MAX_PAGES, "timeout": args.timeout,
                 "target_threads": 5, "lfi_threads": 5, "rate": 5.0,
                 "skip_lfi": False, "verbose": False,
-                "no_verify_ssl": args.no_verify_ssl, "lan_mode": args.lan}
+                "no_verify_ssl": args.no_verify_ssl, "lan_mode": args.lan, "discover": not args.no_discover}
         results = run_scan(targets, opts)
         name = safe_name(args.wildcard.replace(".", "_"))
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -11428,7 +11509,7 @@ Examples:
         opts = {"depth": _SCAN_DEPTH, "max_pages": _SCAN_MAX_PAGES, "timeout": args.timeout,
                 "target_threads": 5, "lfi_threads": 5, "rate": 5.0,
                 "skip_lfi": False, "verbose": False,
-                "no_verify_ssl": args.no_verify_ssl, "lan_mode": args.lan}
+                "no_verify_ssl": args.no_verify_ssl, "lan_mode": args.lan, "discover": not args.no_discover}
         results = run_scan(targets, opts)
         name = safe_name(Path(args.listfile).stem)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -11452,7 +11533,7 @@ Examples:
         opts = {"depth": _SCAN_DEPTH, "max_pages": _SCAN_MAX_PAGES, "timeout": args.timeout,
                 "target_threads": 1, "lfi_threads": 5, "rate": 5.0,
                 "skip_lfi": False, "verbose": False,
-                "no_verify_ssl": args.no_verify_ssl, "lan_mode": args.lan}
+                "no_verify_ssl": args.no_verify_ssl, "lan_mode": args.lan, "discover": not args.no_discover}
         results = run_scan([(target, "single")], opts)
         r = results[0]
 

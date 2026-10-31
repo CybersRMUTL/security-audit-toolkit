@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Fast host-discovery pre-pass for CIDR / multi-host scans (on by default,
+  `--no-discover` or the advanced prompt to turn it off). Instead of waiting
+  out the full HTTP timeout on every dead IP, it TCP-knocks the common web
+  ports first (80/443/8080/8443, plus device ports in LAN mode) with high
+  concurrency and a short timeout, then deep-scans only hosts with an open
+  web port — a /24 that used to take minutes of timeouts now resolves in
+  seconds. Uses TCP connects (no ICMP), so it still works when ping is
+  blocked; skipped IPs are kept in the report as unreachable so totals match.
 - LAN mode for internal-network scanning, chosen up front from a scan-mode
   menu (Auto / External / LAN) — also `--lan`, and still auto-enabled for
   private-IP targets in Auto. External forces remote behaviour even for a
