@@ -1394,6 +1394,99 @@ def _analyze_components(fp):
     return out
 
 
+# ไฟล์/endpoint ที่ "ไม่ควรเข้าถึงได้จากภายนอก" — แต่ละตัวมี validator กันผลบวกปลอม (SPA ตอบ 200 ทุก URL)
+# (path, ชื่อ, severity, regex ยืนยันเนื้อหา|None)
+EXPOSURE_CHECKS = [
+    ("/.env", "ไฟล์ .env เปิดเผย (อาจมี DB credentials/APP_KEY)", "Critical", r"(?:APP_KEY|DB_PASSWORD|DB_HOST|APP_ENV|MAIL_PASSWORD)\s*="),
+    ("/.env.bak", "ไฟล์ .env สำรองเปิดเผย", "Critical", r"(?:APP_KEY|DB_PASSWORD)\s*="),
+    ("/.env.save", "ไฟล์ .env สำรองเปิดเผย", "Critical", r"(?:APP_KEY|DB_PASSWORD)\s*="),
+    ("/.git/HEAD", "Git repository เปิดเผย (.git/HEAD)", "High", r"ref:\s*refs/"),
+    ("/.git/config", "Git config เปิดเผย (.git/config)", "High", r"\[core\]|\[remote"),
+    ("/composer.lock", "composer.lock เปิดเผย (เผยเวอร์ชันแพ็กเกจ PHP ทั้งหมด → เทียบ CVE ได้)", "Medium", r"\"packages\""),
+    ("/composer.json", "composer.json เปิดเผย (เผย dependency)", "Low", r"\"require\""),
+    ("/package.json", "package.json เปิดเผย (เผย JS dependency)", "Low", r"\"dependencies\"|\"devDependencies\""),
+    ("/wp-config.php.bak", "สำรอง wp-config.php เปิดเผย (DB credentials)", "Critical", r"DB_PASSWORD|DB_NAME|AUTH_KEY"),
+    ("/wp-config.php~", "สำรอง wp-config.php เปิดเผย (DB credentials)", "Critical", r"DB_PASSWORD|DB_NAME"),
+    ("/phpinfo.php", "phpinfo() เปิดเผย (เผยคอนฟิก/พาธ/โมดูลทั้งหมด)", "High", r"phpinfo\(\)|<title>phpinfo"),
+    ("/info.php", "phpinfo() เปิดเผย", "High", r"phpinfo\(\)|<title>phpinfo"),
+    ("/server-status", "Apache mod_status (server-status) เปิดสาธารณะ", "Medium", r"Apache Server Status"),
+    ("/server-info", "Apache mod_info (server-info) เปิดสาธารณะ", "Medium", r"Apache Server Information"),
+    ("/web.config", "web.config (IIS) เปิดเผย", "Medium", r"<configuration"),
+    ("/.aws/credentials", "AWS credentials เปิดเผย", "Critical", r"aws_access_key_id|aws_secret"),
+    ("/backup.sql", "ดัมป์ฐานข้อมูล (.sql) เปิดเผย", "Critical", r"INSERT INTO|CREATE TABLE|-- MySQL dump"),
+    ("/.DS_Store", ".DS_Store เปิดเผย (โครงสร้างไฟล์)", "Low", r"Bud1|\x00\x00\x00\x01"),
+]
+
+
+def _probe_exposures(session, base, prefix, timeout):
+    """ตรวจไฟล์/endpoint ที่เปิดเผย (.env/.git/composer/phpinfo/server-status/backup)
+    — ยืนยันด้วย validator กันผลบวกปลอม คืน {EXPOSURE-<slug>: finding}"""
+    out = {}
+    t = min(timeout, 5.0)
+    for path, name, sev, validator in EXPOSURE_CHECKS:
+        try:
+            r = session.get(base + prefix + path, timeout=t, allow_redirects=False)
+        except requests.RequestException:
+            continue
+        if r.status_code != 200:
+            continue
+        body = (r.text or "")[:8000]
+        if validator and not re.search(validator, body, re.I):
+            continue
+        slug = path.strip("/").replace("/", "-").replace(".", "")
+        key = f"EXPOSURE-{slug}"
+        out[key] = {
+            "cve": key, "name": name, "severity": sev,
+            "trigger": f"เข้าถึง {path} ได้จากภายนอก (HTTP 200 + ยืนยันเนื้อหา)",
+            "host_check": f"ปิดการเข้าถึง {path} ที่ web server (deny/location) และหมุนเวียน secret ที่รั่วทันที",
+            "status": "vulnerable",
+            "reason": f"เข้าถึง {path} ได้ (HTTP 200) — {name} ควรปิดและตรวจสอบว่าถูกเข้าถึงไปแล้วหรือไม่",
+        }
+    return out
+
+
+def _probe_framework(session, base, prefix, fp, timeout):
+    """ตรวจ framework debug/profiler ที่เปิดทิ้งไว้ (Laravel Ignition, Symfony profiler)"""
+    out = {}
+    t = min(timeout, 5.0)
+    try:
+        r = session.get(base + prefix + "/_ignition/health-check", timeout=t, allow_redirects=False)
+        low = (r.text or "").lower()
+        if r.status_code == 200 and ("can_execute" in low or "ignition" in low or "\"healthy\"" in low):
+            out["FRAMEWORK-Laravel-Ignition"] = {
+                "cve": "FRAMEWORK-Laravel-Ignition", "name": "Laravel Ignition (debug) เปิดอยู่",
+                "severity": "High", "trigger": "เข้าถึง /_ignition/health-check ได้",
+                "host_check": "ตั้ง APP_DEBUG=false และอัปเดต facade/ignition (แก้ CVE-2021-3129)",
+                "status": "vulnerable-conditions",
+                "reason": "พบ Laravel Ignition (หน้า debug) เปิดอยู่ — เผยข้อมูล debug และเสี่ยง CVE-2021-3129 (RCE) ถ้ารุ่นเก่า ควรปิด APP_DEBUG",
+            }
+    except requests.RequestException:
+        pass
+    try:
+        r = session.get(base + prefix + "/_profiler", timeout=t, allow_redirects=False)
+        low = (r.text or "").lower()
+        if r.status_code == 200 and "symfony" in low and ("profiler" in low or "web profiler" in low):
+            out["FRAMEWORK-Symfony-Profiler"] = {
+                "cve": "FRAMEWORK-Symfony-Profiler", "name": "Symfony Web Profiler เปิดสาธารณะ",
+                "severity": "High", "trigger": "เข้าถึง /_profiler ได้",
+                "host_check": "ปิด web profiler ในโปรดักชัน (เอา symfony/web-profiler-bundle ออกหรือจำกัด IP)",
+                "status": "vulnerable",
+                "reason": "Symfony Web Profiler เข้าถึงได้จากภายนอก — เผย config/query/เส้นทาง/ตัวแปร debug",
+            }
+    except requests.RequestException:
+        pass
+    hdrs = fp.get("headers", {}) or {}
+    if "x-debug-token" in hdrs or "x-debug-token-link" in hdrs:
+        out.setdefault("FRAMEWORK-Symfony-Debug", {
+            "cve": "FRAMEWORK-Symfony-Debug", "name": "Symfony debug mode (X-Debug-Token)",
+            "severity": "Medium", "trigger": "พบ header X-Debug-Token",
+            "host_check": "ตั้ง APP_ENV=prod / APP_DEBUG=0 ในโปรดักชัน",
+            "status": "vulnerable-conditions",
+            "reason": "พบ header X-Debug-Token — Symfony อาจรันในโหมด debug บนโปรดักชัน ควรปิด",
+        })
+    return out
+
+
 def _stack_profile(fp, cms_info):
     """สรุปสแตกเป็นชั้น ๆ สำหรับแสดงผล: OS → device → server → container → runtime → app"""
     layers = []
@@ -2815,6 +2908,8 @@ def scan_single_target(target_str, opts, idx=1, total=1):
     app_cves = _analyze_apps(cms_info)
     device_cves = _analyze_device(fp)
     component_cves = _analyze_components(fp)
+    exposure_cves = _probe_exposures(session, base, path_prefix, opts["timeout"])
+    framework_cves = _probe_framework(session, base, path_prefix, fp, opts["timeout"])
     fp["stack_layers"] = _stack_profile(fp, cms_info)
     _v and fp["stack_layers"] and print(f"    Stack: {' → '.join(fp['stack_layers'])}")
     online_cves = _online_cve_scan(fp, cms_info, opts)
@@ -2875,11 +2970,13 @@ def scan_single_target(target_str, opts, idx=1, total=1):
              ([cve_115560] if cve_115560 else []) +
              list(nodejs_cves.values()) + list(gitlab_cves.values()) +
              list(app_cves.values()) + list(device_cves.values()) +
-             list(component_cves.values()) + list(online_cves.values()))
+             list(component_cves.values()) + list(exposure_cves.values()) +
+             list(framework_cves.values()) + list(online_cves.values()))
 
     if selected:
         all_r = [r for r in all_r if r.get("cve") in selected
-                 or r.get("cve", "").startswith(("UNSUPPORTED-", "APP-", "DEVICE-", "COMP-", "ONLINE-"))]
+                 or r.get("cve", "").startswith(("UNSUPPORTED-", "APP-", "DEVICE-", "COMP-",
+                                                  "EXPOSURE-", "FRAMEWORK-", "ONLINE-"))]
     vuln_cnt = sum(1 for r in all_r if r["status"] in ("vulnerable", "high-risk", "likely-vulnerable", "unpatched"))
     warn_cnt = sum(1 for r in all_r if r["status"] in ("medium-risk", "vulnerable-version", "vulnerable-conditions"))
     crit = vuln_cnt + warn_cnt
@@ -2913,7 +3010,8 @@ def scan_single_target(target_str, opts, idx=1, total=1):
         "cve_115560": cve_115560, "nodejs_cves": nodejs_cves,
         "gitlab_cves": gitlab_cves,
         "app_cves": app_cves, "device_cves": device_cves,
-        "component_cves": component_cves, "online_cves": online_cves,
+        "component_cves": component_cves, "exposure_cves": exposure_cves,
+        "framework_cves": framework_cves, "online_cves": online_cves,
         "summary": {"total_cves": len(all_r), "detected": crit,
                     "vulnerable": vuln_cnt, "warning": warn_cnt,
                     "critical": crit, "safe": safe, "unknown": unknown},
@@ -4763,6 +4861,10 @@ def _host_findings(h):
         out.append({**d, "category": "Device", "target": tgt})
     for _cve, d in (h.get("component_cves") or {}).items():
         out.append({**d, "category": "Component", "target": tgt})
+    for _cve, d in (h.get("exposure_cves") or {}).items():
+        out.append({**d, "category": "Exposure", "target": tgt})
+    for _cve, d in (h.get("framework_cves") or {}).items():
+        out.append({**d, "category": "Framework", "target": tgt})
     for _cve, d in (h.get("online_cves") or {}).items():
         out.append({**d, "category": "Online CVE", "target": tgt})
     return out
