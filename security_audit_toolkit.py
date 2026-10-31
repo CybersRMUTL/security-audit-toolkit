@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
 security_audit_toolkit.py — Security Audit Toolkit (RMUT CERT) v6.4
-Scanner (13 CVEs) + RCE Verify (chain-of-custody) + Report Generator (PDF/CSV/Excel/HTML)
+Scanner (14 CVEs) + RCE Verify (chain-of-custody) + Report Generator (PDF/CSV/Excel/HTML)
 + Cross-Menu Navigation + CVE Display + File Browser (GUI & Interactive CLI)
 
 Menu & Outputs:
-  1) ดูรายการ CVE ที่ใช้ตรวจสอบ (13 รายการ)
-     → Output: ตารางรายละเอียด 13 CVEs (PHP 3 / NGINX 5 / Node.js 4 / GitLab 1) บนหน้าจอ
+  1) ดูรายการ CVE ที่ใช้ตรวจสอบ (14 รายการ)
+     → Output: ตารางรายละเอียด 14 CVEs (PHP 3 / NGINX 5 / Node.js 4 / GitLab 1 / OS-Kernel 1) บนหน้าจอ
   2) Scan Only (Single / CIDR / Wildcard / File List CSV-TXT)
      → Output: ไฟล์ JSON ผลการสแกน (scan_<mode>_<target>_<timestamp>.json)
   3) RCE Verify (Single / Browse JSON / CIDR / Wildcard)
@@ -192,6 +192,10 @@ CVE_DATABASE = [
      "name": "GitLab CVE-2026-110264",
      "desc": "ช่องโหว่ใน GitLab — ตรวจจับการมีอยู่ของ GitLab + เวอร์ชัน (ยืนยันบนเครื่อง/ตาม advisory)",
      "patched": "อัปเกรด GitLab เป็นรุ่นที่แก้แล้ว (ดู advisory ของ CVE)"},
+    {"id": "CVE-2026-98432", "category": "OS/Kernel", "severity": "Critical",
+     "name": "Linux Kernel TCP Use-After-Free (IPv4 options)",
+     "desc": "use-after-free ใน IPv4 TCP connection setup (race) — SYN ที่มี IPv4 options ไปพอร์ต TCP ที่ listen → RCE/DoS (CVSS 9.8, network, ไม่ต้องยืนยันตัวตน) กระทบ kernel 4.4+ ตรวจจากภายนอกไม่ได้ ต้องยืนยัน uname -r บนเครื่อง",
+     "patched": "อัปเดตเคอร์เนลเป็นรุ่นที่ดิสโทรแก้แล้ว (fix: commit e3f33b0a1d89) แล้วรีบูต หรือใช้ live-patch"},
 ]
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -270,6 +274,9 @@ CONFIRM_OUTPUT = {
     "CVE-2026-110264": {
         "vuln": "เวอร์ชัน GitLab อยู่ในช่วงที่ได้รับผลกระทบ: 16.0.0–18.5.1 / 18.6.0–18.6.1 / 18.7.0 (ต่ำกว่า 18.5.2 / 18.6.2 / 18.7.1)",
         "safe": "เวอร์ชัน GitLab ≥ 18.5.2 / 18.6.2 / 18.7.1 แล้ว หรือไม่ได้มีการติดตั้ง GitLab บนเครื่องนี้ → ปลอดภัย"},
+    "CVE-2026-98432": {
+        "vuln": "บนเครื่อง: `uname -r` แสดงเคอร์เนล Linux 4.4 ขึ้นไปที่ยังเป็นรุ่นก่อนแก้ (ยังไม่มี backport ของ commit e3f33b0a1d89 'ipv4: free inet_opt and ireq_opt after an RCU grace period' ตาม advisory ของดิสโทร) และเครื่องเปิดพอร์ต TCP ที่เข้าถึงจากเครือข่ายได้ → เข้าข่าย",
+        "safe": "เคอร์เนลอัปเดตเป็นรุ่นที่ดิสโทรแก้แล้ว (หรือใช้ live-patch) และรีบูตแล้ว, หรือระบบไม่ใช่ Linux → ปลอดภัย"},
 
     # ── รุ่นหมดอายุ (Unsupported) ──
     "UNSUPPORTED-PHP": {
@@ -1696,6 +1703,38 @@ def _probe_os(host, fp, timeout):
                     return
     except Exception:
         pass
+
+
+def _analyze_os_kernel(fp):
+    """CVE-2026-98432 — Linux kernel IPv4 TCP use-after-free (CVSS 9.8, kernel 4.4+).
+    เป็นช่องโหว่ระดับเคอร์เนล มองผ่าน HTTP ไม่เห็น → ผูกกับผล OS fingerprint แล้วแจ้งให้ยืนยันบนเครื่อง
+    - Windows ชัดเจน → n/a (ไม่เกี่ยวข้อง)
+    - Linux หรือยังระบุ OS ไม่ได้ → unknown (อาจกระทบ ยืนยันแพตช์จากภายนอกไม่ได้)"""
+    os_txt = f"{fp.get('os', '')} {fp.get('os_version', '')}".strip()
+    low = os_txt.lower()
+    base = {
+        "cve": "CVE-2026-98432",
+        "name": "Linux Kernel TCP Use-After-Free (IPv4 options)",
+        "severity": "Critical",
+        "trigger": "SYN ที่มี IPv4 options → พอร์ต TCP ที่ listen (network · ไม่ต้องยืนยันตัวตน)",
+        "host_check": "ตรวจเวอร์ชันเคอร์เนล `uname -r` แล้วเทียบ advisory ของดิสโทร (fix: commit e3f33b0a1d89); "
+                      "อัปเดตเคอร์เนลเป็นรุ่นที่แก้แล้วและรีบูต หรือใช้ live-patch — กระทบ Linux kernel 4.4 ขึ้นไป",
+    }
+    windows = any(k in low for k in ("windows", " iis", "win64", "win32")) or low.startswith("iis")
+    linuxish = any(k in low for k in ("linux", "ubuntu", "debian", "centos", "rhel", "red hat",
+                                      "alpine", "unix", "almalinux", "rocky", "amazon", "suse"))
+    if windows and not linuxish:
+        return {base["cve"]: {**base, "status": "n/a",
+                "reason": "OS ที่ตรวจพบไม่ใช่ Linux (Windows) — ช่องโหว่เคอร์เนล Linux นี้จึงไม่เกี่ยวข้อง"}}
+    src = fp.get("os_source", "") or "ไม่ทราบแหล่ง"
+    conf = fp.get("os_confidence", "") or "ไม่ระบุ"
+    if linuxish:
+        hint = f"ตรวจพบสัญญาณว่าเป็น Linux ({src} · ความเชื่อมั่น {conf})"
+    else:
+        hint = "ยังระบุ OS จากภายนอกไม่ได้ชัดเจน — หากเป็น Linux kernel 4.4+ จะเข้าข่าย"
+    return {base["cve"]: {**base, "status": "unknown",
+            "reason": f"{hint}. เคอร์เนล 4.4+ เกือบทั้งหมดเข้าข่าย (CVSS 9.8) และ 'แพตช์แล้วหรือยัง' "
+                      f"ตรวจจากภายนอกไม่ได้ ต้องเข้าไปตรวจ `uname -r` บนเครื่อง"}}
 
 
 def _probe_mac(ip, fp, opts):
@@ -3239,6 +3278,8 @@ def scan_single_target(target_str, opts, idx=1, total=1):
         _tp = urlparse(base)
         tls_cves = _probe_tls(_tp.hostname or "", _tp.port or 443, opts["timeout"], fp=fp)
     _probe_os(urlparse(base).hostname or "", fp, opts["timeout"])
+    _sel0 = opts.get("selected_cves")
+    oskernel_cves = _analyze_os_kernel(fp) if (not _sel0 or "CVE-2026-98432" in _sel0) else {}
     fp["stack_layers"] = _stack_profile(fp, cms_info)
     _v and fp["stack_layers"] and print(f"    Stack: {' → '.join(fp['stack_layers'])}")
     online_cves = _online_cve_scan(fp, cms_info, opts)
@@ -3301,7 +3342,8 @@ def scan_single_target(target_str, opts, idx=1, total=1):
              list(app_cves.values()) + list(device_cves.values()) +
              list(component_cves.values()) + list(exposure_cves.values()) +
              list(framework_cves.values()) + list(header_cves.values()) +
-             list(tls_cves.values()) + list(online_cves.values()))
+             list(tls_cves.values()) + list(online_cves.values()) +
+             list(oskernel_cves.values()))
 
     if selected:
         all_r = [r for r in all_r if r.get("cve") in selected
@@ -3346,6 +3388,7 @@ def scan_single_target(target_str, opts, idx=1, total=1):
         "component_cves": component_cves, "exposure_cves": exposure_cves,
         "framework_cves": framework_cves, "header_cves": header_cves,
         "tls_cves": tls_cves, "online_cves": online_cves,
+        "oskernel_cves": oskernel_cves,
         "summary": {"total_cves": len(all_r), "detected": crit,
                     "vulnerable": vuln_cnt, "warning": warn_cnt,
                     "critical": crit, "safe": safe, "unknown": unknown},
@@ -5205,6 +5248,8 @@ def _host_findings(h):
         out.append({**d, "category": "TLS", "target": tgt})
     for _cve, d in (h.get("online_cves") or {}).items():
         out.append({**d, "category": "Online CVE", "target": tgt})
+    for _cve, d in (h.get("oskernel_cves") or {}).items():
+        out.append({**d, "category": "OS/Kernel", "target": tgt})
     return out
 
 
@@ -5349,13 +5394,23 @@ THAICERT_GROUPS = [
 
 def _thaicert_coverage(data):
     """จัดสิ่งที่ตรวจพบในสแกนนี้เข้า 8 กลุ่มระบบของ ThaiCERT + เพดานความสามารถของเครื่องมือ
-    คืน list[dict]: {no, name, ex, cap, note, hosts(int), items(list[str])}"""
-    g = {x["no"]: {**x, "_hosts": set(), "_items": set()} for x in THAICERT_GROUPS}
+    คืน list[dict]: {no, name, ex, cap, note, hosts(int), items(list[str]),
+                     detail:[{host, ip, level, items:[...], cves:[...]}]}
+    detail ใช้สำหรับ drill-down ในแดชบอร์ด HTML (คลิกกลุ่ม → เห็นรายโฮสต์ที่เข้ากลุ่มนั้น)"""
+    g = {x["no"]: {**x, "_hosts": set(), "_items": set(), "_detail": {}} for x in THAICERT_GROUPS}
 
-    def hit(no, host, item=""):
+    def hit(no, host, item="", cves=(), hmeta=None):
         g[no]["_hosts"].add(host)
         if item:
             g[no]["_items"].add(item)
+        d = g[no]["_detail"].setdefault(host, {"host": host, "ip": (hmeta or {}).get("ip", ""),
+                                                "level": (hmeta or {}).get("level", ""),
+                                                "items": set(), "cves": set()})
+        if item:
+            d["items"].add(item)
+        for cv in cves:
+            if cv:
+                d["cves"].add(cv)
 
     CMS1 = ("wordpress", "drupal", "joomla", "moodle", "nextcloud")
     FW2 = ("laravel", "symfony", "codeigniter", "yii", "slim")
@@ -5365,6 +5420,7 @@ def _thaicert_coverage(data):
         if not h.get("reachable"):
             continue
         host = h.get("host", "")
+        hm = {"ip": h.get("ip", ""), "level": h.get("level") or h.get("risk_level", "")}
         cms = (h.get("cms") or "").lower()
         server = (h.get("server") or "").lower()
         os_ = (h.get("os") or "").lower()
@@ -5375,53 +5431,64 @@ def _thaicert_coverage(data):
         comps = h.get("components", []) or []
         cves = [str(f.get("cve", "")) for f in (h.get("findings", []) or [])]
 
+        def _pfx(*prefixes):
+            return [c for c in cves if c.startswith(prefixes)]
+
         # 1) CMS / เว็บไซต์ภายในองค์กร
         _c1 = next((c for c in CMS1 if c in cms), "")
-        if _c1 or any(c.startswith("APP-") for c in cves):
-            hit(1, host, (h.get("cms", "") or "").strip() if _c1 else "")
+        _app_cves = _pfx("APP-")
+        if _c1 or _app_cves:
+            hit(1, host, (h.get("cms", "") or "").strip() if _c1 else "", _app_cves, hm)
         # 2) Framework / API backend
         _f2 = next((c for c in FW2 if c in cms or c in stack), "")
-        if _f2 or any(c.startswith("FRAMEWORK-") for c in cves):
-            hit(2, host, _f2.title() if _f2 else "debug ที่เปิดทิ้ง")
+        _fw_cves = _pfx("FRAMEWORK-")
+        if _f2 or _fw_cves:
+            hit(2, host, _f2.title() if _f2 else "debug ที่เปิดทิ้ง", _fw_cves, hm)
         # 3) Hosting Control Panel
         _cp = next((c for c in CP3 if c in dev_l), "")
         if _cp:
-            hit(3, host, device)
+            hit(3, host, device, _pfx("DEVICE-"), hm)
         # 4) อุปกรณ์สำเร็จรูป / NAS / กล้อง / network
+        _dev_cves = _pfx("DEVICE-")
         if device and not _cp:
-            hit(4, host, device)
-        if any(c.startswith("DEVICE-") for c in cves):
-            hit(4, host)
+            hit(4, host, device, _dev_cves, hm)
+        elif _dev_cves:
+            hit(4, host, "", _dev_cves, hm)
         if h.get("mac_vendor"):
-            hit(4, host, "MAC→" + h["mac_vendor"])
+            hit(4, host, "MAC→" + h["mac_vendor"], (), hm)
         # 5) Container / Docker (ชั้น edge ที่มองเห็น)
         _ct = next((c for c in CTR5 if c in stack), "")
         if _ct:
-            hit(5, host, _ct.title())
+            hit(5, host, _ct.title(), (), hm)
         # 6) Windows + PHP
         if "windows" in os_ or "iis" in server:
-            hit(6, host, "Windows/IIS")
+            hit(6, host, "Windows/IIS", (), hm)
         if "xampp" in stack:
-            hit(6, host, "XAMPP")
+            hit(6, host, "XAMPP", (), hm)
         # 7) ระบบทดสอบ / เก่า / สำรอง (ไฟล์รั่ว/แบ็กอัป/debug)
-        if any(c.startswith("EXPOSURE-") for c in cves):
-            hit(7, host, "ไฟล์/แบ็กอัปรั่ว")
-        if any(c.startswith("FRAMEWORK-") for c in cves):
-            hit(7, host, "debug เปิดทิ้ง")
+        _exp_cves = _pfx("EXPOSURE-")
+        if _exp_cves:
+            hit(7, host, "ไฟล์/แบ็กอัปรั่ว", _exp_cves, hm)
+        if _fw_cves:
+            hit(7, host, "debug เปิดทิ้ง", _fw_cves, hm)
         if any("phpinfo" in (c.get("name", "") or "").lower() for c in comps):
-            hit(7, host, "phpinfo")
+            hit(7, host, "phpinfo", (), hm)
         # 8) ผู้ให้บริการภายนอก / Cloud (อนุมานจาก WAF/CDN + shared hosting)
         if waf:
-            hit(8, host, waf)
+            hit(8, host, waf, (), hm)
         if _cp in ("cpanel", "plesk", "directadmin"):
-            hit(8, host, "shared hosting (" + device + ")")
+            hit(8, host, "shared hosting (" + device + ")", (), hm)
 
     out = []
     for x in THAICERT_GROUPS:
         gg = g[x["no"]]
+        detail = []
+        for host, d in sorted(gg["_detail"].items()):
+            detail.append({"host": d["host"], "ip": d["ip"], "level": d["level"],
+                           "items": sorted(d["items"]), "cves": sorted(d["cves"])})
         out.append({"no": x["no"], "name": x["name"], "ex": x["ex"], "cap": x["cap"],
                     "note": x["note"], "hosts": len(gg["_hosts"]),
-                    "items": sorted(gg["_items"])[:6]})
+                    "items": sorted(gg["_items"])[:6], "detail": detail})
     return out
 
 
@@ -6617,10 +6684,10 @@ def _build_pdf(data, charts, output_path, font):
 
         _CATO = {"NGINX": 0, "PHP": 1, "Node.js": 2, "GitLab": 3, "App": 4, "Device": 5,
                  "Component": 6, "Exposure": 7, "Framework": 8, "Headers": 9, "TLS": 10,
-                 "Online CVE": 11, "Other": 99}
+                 "Online CVE": 11, "OS/Kernel": 12, "Other": 99}
         _CATC = {"NGINX": "N", "PHP": "P", "Node.js": "J", "GitLab": "G", "App": "A",
                  "Device": "D", "Component": "C", "Exposure": "E", "Framework": "F",
-                 "Headers": "H", "TLS": "T", "Online CVE": "O", "Other": "X"}
+                 "Headers": "H", "TLS": "T", "Online CVE": "O", "OS/Kernel": "K", "Other": "X"}
         # รวบรวมคอลัมน์ CVE จากทุกโฮสต์ที่เข้าถึงได้
         _cvem = {}
         for _h in hs:
@@ -7011,7 +7078,7 @@ def _build_pdf(data, charts, output_path, font):
         sm_rows.append(["พารามิเตอร์", f"threads={o.get('target_threads','-')} · depth={o.get('depth','-')} "
                         f"· max_pages={o.get('max_pages','-')} · timeout={o.get('timeout','-')}s "
                         f"· crawl_budget={o.get('crawl_budget','-')}s · skip_lfi={o.get('skip_lfi','-')}"])
-    sm_rows.append(["จำนวน CVE ที่ตรวจ", "13 รายการ (PHP 3, NGINX 5, Node.js 4, GitLab 1)"])
+    sm_rows.append(["จำนวน CVE ที่ตรวจ", "14 รายการ (PHP 3, NGINX 5, Node.js 4, GitLab 1, OS/Kernel 1)"])
     t = Table([[P(a, cellb), P(b, cell)] for a, b in sm_rows], colWidths=[5 * cm, 11 * cm])
     t.setStyle(TableStyle([("LINEBELOW", (0, 0), (-1, -1), 0.4, colors.HexColor("#d9dce6")),
                            ("BACKGROUND", (0, 0), (0, -1), RMUT_LIGHT), ("TEXTCOLOR", (0, 0), (0, -1), RMUT_BLUE),
@@ -8873,9 +8940,9 @@ function togIPRow(uid){
 
 // ── 6. Dynamic Matrix (โฮสต์ × CVE) ──
 var MX_PFX = {'NGINX':'N','PHP':'P','Node.js':'J','GitLab':'G','App':'A','Device':'D',
-              'Component':'C','Exposure':'E','Framework':'F','Headers':'H','TLS':'T','Online CVE':'O'};
+              'Component':'C','Exposure':'E','Framework':'F','Headers':'H','TLS':'T','Online CVE':'O','OS/Kernel':'K'};
 var MX_ORD = {'NGINX':0,'PHP':1,'Node.js':2,'GitLab':3,'App':4,'Device':5,'Component':6,
-              'Exposure':7,'Framework':8,'Headers':9,'TLS':10,'Online CVE':11};
+              'Exposure':7,'Framework':8,'Headers':9,'TLS':10,'Online CVE':11,'OS/Kernel':12};
 function getAllCVEList(){
   const map = {};
   D.findings.forEach(f => {
@@ -9719,27 +9786,36 @@ function init(){
 }
 
 // ── ตารางความครอบคลุม 8 กลุ่มระบบ ThaiCERT (คิดจาก DATA ทั้งหมด ไม่ขึ้นกับตัวกรอง) ──
+function tc8Esc(s){ return (''+s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+
 function renderThaiCERT8(){
   const tc = (D.thaicert || []);
   if(!tc.length) return;
   const avg = Math.round(tc.reduce((a,x)=>a+x.cap,0)/tc.length);
   const cap = document.getElementById('tc8-cap');
   if(cap) cap.innerHTML = 'จับคู่สิ่งที่ตรวจพบเข้ากับ 8 กลุ่มระบบของ ThaiCERT/NCSA · ' +
-    'ความสามารถเฉลี่ยในการตรวจจากภายนอก ≈ <b style="color:var(--ink)">'+avg+'%</b>';
+    'ความสามารถเฉลี่ยในการตรวจจากภายนอก ≈ <b style="color:var(--ink)">'+avg+'%</b> · ' +
+    '<span style="color:var(--muted)">คลิกแต่ละกลุ่มเพื่อดูรายละเอียด (drill-down)</span>';
   const thd = document.getElementById('tc8-thd');
   if(thd) thd.innerHTML = '<tr>'+
+    '<th style="text-align:left;width:26px"></th>'+
     '<th style="text-align:left">กลุ่มระบบ</th>'+
     '<th style="width:170px">ความสามารถตรวจจากภายนอก</th>'+
-    '<th style="text-align:left;width:230px">พบในสแกนนี้</th>'+
+    '<th style="text-align:left;width:220px">พบในสแกนนี้</th>'+
     '<th style="text-align:left">ขอบเขต / จุดอ่อน</th></tr>';
   const barColor = p => p>=70 ? 'var(--safe)' : (p>=45 ? 'var(--warn)' : 'var(--vuln)');
-  const esc = s => (''+s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+  const esc = tc8Esc;
+  const LCm = (typeof LC!=='undefined') ? LC : {};
+  const LTm = (typeof LT!=='undefined') ? LT : {};
   const rows = tc.map(x=>{
     const found = x.hosts
       ? '<b style="color:var(--ink)">'+x.hosts+' โฮสต์</b>' +
         (x.items && x.items.length ? '<br><span style="color:var(--muted);font-size:11px">'+esc(x.items.slice(0,4).join(', '))+'</span>' : '')
       : '<span style="color:var(--muted)">— ไม่พบ</span>';
-    return '<tr>'+
+    const hasDetail = (x.detail && x.detail.length);
+    // แถวกลุ่ม (คลิกได้)
+    const head = '<tr class="tc8-row" style="cursor:pointer" onclick="togTC8('+x.no+')">'+
+      '<td style="text-align:center;color:var(--muted)"><span id="tc8arr_'+x.no+'">▸</span></td>'+
       '<td><b>'+x.no+'. '+esc(x.name)+'</b><br><span style="color:var(--muted);font-size:11px">ตัวอย่าง: '+esc(x.ex)+'</span></td>'+
       '<td><div style="display:flex;align-items:center;gap:8px">'+
         '<div style="flex:1;height:8px;background:#eef1f6;border-radius:5px;overflow:hidden">'+
@@ -9748,9 +9824,52 @@ function renderThaiCERT8(){
       '</div></td>'+
       '<td>'+found+'</td>'+
       '<td style="color:#555;font-size:11.5px;line-height:1.55">'+esc(x.note)+'</td></tr>';
+    // แถวรายละเอียด (ซ่อนไว้)
+    let body = '';
+    if(hasDetail){
+      const hostCards = x.detail.map((d,idx)=>{
+        const lv = d.level||'';
+        const pill = lv ? '<span class="pill" style="background:'+(LCm[lv]||'#9aa0ab')+';font-size:10px">'+(LTm[lv]||lv)+'</span>' : '';
+        const items = (d.items&&d.items.length) ? '<div style="color:#555;font-size:11.5px;margin-top:2px">'+esc(d.items.join(', '))+'</div>' : '';
+        const cves = (d.cves&&d.cves.length)
+          ? '<div style="margin-top:4px;display:flex;gap:4px;flex-wrap:wrap">'+
+            d.cves.map(cv=>'<span class="pill" style="background:#e0e7ff;color:#1e3a8a;font-size:10px;cursor:pointer" onclick="filterByCVE(\''+esc(cv)+'\');event.stopPropagation()" title="กรองเมทริกซ์ด้วย '+esc(cv)+'">'+esc(cv)+'</span>').join('')+'</div>'
+          : '';
+        return '<div style="border:1px solid var(--line);border-radius:8px;padding:8px 10px;background:#fff">'+
+          '<div style="display:flex;align-items:center;gap:8px;justify-content:space-between">'+
+            '<a style="font-weight:700;color:var(--ink);cursor:pointer;text-decoration:underline" '+
+              'onclick="tc8Open('+x.no+','+idx+');event.stopPropagation()" '+
+              'title="เปิดรายละเอียดโฮสต์">'+esc(d.host)+'</a>'+pill+'</div>'+
+          (d.ip?'<div style="color:var(--muted);font-size:11px">'+esc(d.ip)+'</div>':'')+
+          items+cves+'</div>';
+      }).join('');
+      body = '<tr id="tc8det_'+x.no+'" style="display:none"><td></td><td colspan="4" style="background:#fbfcfe;padding:12px">'+
+        '<div style="font-size:12px;font-weight:700;color:var(--ink);margin-bottom:8px">โฮสต์ที่เข้ากลุ่มนี้ ('+x.detail.length+') — คลิกชื่อโฮสต์เพื่อเปิดรายละเอียดเต็ม</div>'+
+        '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:8px">'+hostCards+'</div>'+
+        '</td></tr>';
+    } else {
+      body = '<tr id="tc8det_'+x.no+'" style="display:none"><td></td><td colspan="4" style="background:#fbfcfe;padding:12px;color:var(--muted);font-size:12px">'+
+        'ไม่พบระบบกลุ่มนี้ในการสแกนครั้งนี้ — อาจเพราะเป้าหมายไม่มีระบบกลุ่มนี้ หรืออยู่นอกเพดานการตรวจจากภายนอก ('+x.cap+'%). '+esc(x.note)+'</td></tr>';
+    }
+    return head + body;
   }).join('');
   const tb = document.getElementById('tc8-tb');
   if(tb) tb.innerHTML = rows;
+}
+
+function togTC8(no){
+  const det = document.getElementById('tc8det_'+no);
+  const arr = document.getElementById('tc8arr_'+no);
+  if(!det) return;
+  const open = det.style.display==='none';
+  det.style.display = open ? '' : 'none';
+  if(arr) arr.textContent = open ? '▾' : '▸';
+}
+
+function tc8Open(no, idx){
+  const g = (D.thaicert||[]).find(x=>x.no===no);
+  if(!g || !g.detail || !g.detail[idx]) return;
+  openDr(g.detail[idx].host);
 }
 
 init();
@@ -10342,7 +10461,7 @@ def post_action_menu(last_result=None):
         ("verify", "3) RCE Verify (พิสูจน์ช่องโหว่)", "ทดสอบเจาะระบบยืนยัน RCE บนเป้าหมาย", "โฟลเดอร์หลักฐาน evidence/<host>_<timestamp>/"),
         ("report", "4) Generate Report (สร้างรายงาน)", "Browse เลือกไฟล์ JSON เพื่อออกรายงานสรุปผู้บริหาร", "ไฟล์รายงาน PDF + CSV + กราฟ PNG ใน reports/"),
         ("pipeline", "5) Full Pipeline (ครบวงจร: Single / CIDR / Wildcard)", "รันอัตโนมัติ Scan → RCE Verify → Generate Report", "ไฟล์ JSON + โฟลเดอร์ Evidence + รายงาน PDF/CSV"),
-        ("cve", "1) ดูรายการ CVE ทั้ง 13 รายการ", "แสดงตารางข้อมูลช่องโหว่และเวอร์ชันที่แก้ไข", "ตารางรายละเอียดบนหน้าจอ"),
+        ("cve", "1) ดูรายการ CVE ทั้ง 14 รายการ", "แสดงตารางข้อมูลช่องโหว่และเวอร์ชันที่แก้ไข", "ตารางรายละเอียดบนหน้าจอ"),
         ("main", "กลับหน้าเมนูหลัก (Main Menu)", "", ""),
         ("quit", "ออกจากโปรแกรม (Exit)", "", ""),
     ]
@@ -10354,9 +10473,9 @@ def post_action_menu(last_result=None):
 # ═══════════════════════════════════════════════════════════════════════
 
 def menu_scan():
-    section("เมนู 2: SCAN ONLY — สแกนตรวจหาช่องโหว่ (13 CVEs & LFI)")
+    section("เมนู 2: SCAN ONLY — สแกนตรวจหาช่องโหว่ (14 CVEs & LFI)")
     print(f"  {c('📦 Output ที่จะได้จากเมนูนี้:', C.GRN)} ไฟล์ JSON บันทึกผลสแกน เช่น {c('scan_<mode>_<target>_<timestamp>.json', C.B)}")
-    print(f"  {c('   (ประกอบด้วยข้อมูล Server/PHP Fingerprint, ช่องโหว่ 13 CVEs, จุดเสี่ยง LFI และ Session)', C.D)}\n")
+    print(f"  {c('   (ประกอบด้วยข้อมูล Server/PHP Fingerprint, ช่องโหว่ 14 CVEs, จุดเสี่ยง LFI และ Session)', C.D)}\n")
 
     mode = ask_choice("เลือกรูปแบบเป้าหมายที่ต้องการสแกน:", [
         ("single", "Single Host (เป้าหมายเดี่ยว)",
@@ -10733,7 +10852,7 @@ def menu_generate_report(default_json=None):
 def menu_pipeline():
     section("เมนู 5: FULL PIPELINE — ทำงานครบวงจรอัตโนมัติ (Scan → Verify → Report)")
     print(f"  {c('📋 ขั้นตอนการทำงานอัตโนมัติ 3 ขั้นตอน:', C.B)}")
-    print(f"     • {c('Step 1 — Scan:', C.CYN)} สแกนตรวจหา 13 CVEs (PHP/NGINX/Node.js/GitLab) และสแกนหาจุดเสี่ยง LFI (รองรับ Single / CIDR / Wildcard)")
+    print(f"     • {c('Step 1 — Scan:', C.CYN)} สแกนตรวจหา 14 CVEs (PHP/NGINX/Node.js/GitLab/Kernel) และสแกนหาจุดเสี่ยง LFI (รองรับ Single / CIDR / Wildcard)")
     print(f"     • {c('Step 2 — RCE Verify:', C.CYN)} หากพบช่องโหว่วิกฤต + LFI จะทำการพิสูจน์ RCE และเก็บหลักฐานอัตโนมัติ")
     print(f"     • {c('Step 3 — Generate Report:', C.CYN)} สร้างรายงานสรุปฉบับสมบูรณ์พร้อมแนบหลักฐาน")
     print(f"\n  {c('📦 Output ทั้งหมดที่จะได้จากเมนูนี้:', C.GRN)}")
@@ -10919,12 +11038,12 @@ def main_menu():
             print(c("─" * 74, C.D))
             action = ask_choice("เมนูหลัก (Main Menu):", [
                 ("cve",
-                 "ดูรายการ CVE ที่ตรวจสอบ (13 รายการ)",
+                 "ดูรายการ CVE ที่ตรวจสอบ (14 รายการ)",
                  "PHP 3 · NGINX 5 · Node.js 4 · GitLab 1 — ความรุนแรง เงื่อนไข และรุ่นที่แพตช์",
                  "ตารางบนหน้าจอ"),
                 ("scan",
                  "Scan — สแกนหาช่องโหว่  (Single / CIDR / Wildcard)",
-                 "ตรวจ fingerprint, เวอร์ชัน PHP/NGINX/Node.js/GitLab, 13 CVEs และจุดเสี่ยง LFI",
+                 "ตรวจ fingerprint, เวอร์ชัน PHP/NGINX/Node.js/GitLab, 14 CVEs และจุดเสี่ยง LFI",
                  "ไฟล์ scan_*.json"),
                 ("verify",
                  "RCE Verify — พิสูจน์ช่องโหว่ + เก็บหลักฐาน",
@@ -10997,7 +11116,7 @@ def main():
         epilog="""
 Examples:
   python3 security_audit_toolkit.py                              # interactive menu
-  python3 security_audit_toolkit.py --list-cves                  # show 13 CVEs
+  python3 security_audit_toolkit.py --list-cves                  # show 14 CVEs
   python3 security_audit_toolkit.py --target 192.168.1.10        # quick scan
   python3 security_audit_toolkit.py --cidr 192.168.1.0/24        # CIDR scan
   python3 security_audit_toolkit.py --wildcard example.org         # wildcard scan

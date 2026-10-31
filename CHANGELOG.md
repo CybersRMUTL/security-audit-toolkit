@@ -6,6 +6,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- CVE-2026-98432 — Linux kernel IPv4 TCP use-after-free (CVSS 9.8). Tied to
+  the OS fingerprint: reported as "unknown — verify on host" for Linux
+  (kernel patch state can't be confirmed over HTTP) and "n/a" for Windows,
+  with `uname -r` + distro-advisory host-check guidance. New `OS/Kernel`
+  finding category; scanner count is now 14 CVEs.
+- ThaiCERT 8-group coverage: drill-down in the HTML dashboard (click a
+  group to see the matched hosts, their detections and CVEs; host names
+  open the full host drawer), plus the group breakdown added to the Excel
+  workbook (5th sheet) and a `report_*_thaicert.csv` export.
+
 ## [6.4.0] — 2026-10-31
 
 Backward compatible with 6.3.0: scan JSON from older runs still loads, and the
