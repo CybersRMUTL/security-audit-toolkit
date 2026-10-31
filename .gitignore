@@ -21,6 +21,8 @@ dashboard_*.html
 report_*.xlsx
 report_*_findings.csv
 report_*_ip.csv
+report_*_hosts.csv
+report_*_thaicert.csv
 
 # Target / host lists (real infrastructure — keep private)
 *hosts*.txt

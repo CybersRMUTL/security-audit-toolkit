@@ -7252,6 +7252,24 @@ def _export_csv(data, path):
                         r.get("reason", ""), r.get("host_check", "")])
 
 
+def _export_thaicert_csv(data, path):
+    """CSV ความครอบคลุม 8 กลุ่มระบบตามแนวทาง ThaiCERT + เพดานความสามารถของเครื่องมือ"""
+    tc = _thaicert_coverage(data)
+    avg = int(round(sum(x["cap"] for x in tc) / len(tc))) if tc else 0
+    with open(path, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f)
+        w.writerow(["# ความครอบคลุมตามแนวทาง ThaiCERT — 8 กลุ่มระบบที่อาจใช้ PHP"])
+        w.writerow(["# Capability_% = เพดานการตรวจจากภายนอกแบบไม่ล็อกอิน (remote unauthenticated) โดยประมาณ "
+                    "ไม่ใช่ความแม่นของผลลัพธ์รายกรณี"])
+        w.writerow([f"# ค่าเฉลี่ยทั้ง 8 กลุ่ม = {avg}%"])
+        w.writerow(["Group_No", "Group_Name", "Example_Platforms", "Capability_%",
+                    "Hosts_Found", "Detected_Items", "Scope_Limitation"])
+        for x in tc:
+            w.writerow([x["no"], x["name"], x["ex"], x["cap"],
+                        x["hosts"], ("; ".join(x["items"]) if x["items"] else ""), x["note"]])
+        w.writerow(["", "ค่าเฉลี่ย (Average)", "", avg, "", "", ""])
+
+
 def _export_ip_csv(data, path):
     """CSV รายงาน IP Address แบบละเอียด — 2 ส่วน: สรุปต่อ IP + รายโฮสต์ต่อ IP"""
     import csv as _csv
@@ -7379,7 +7397,7 @@ def _export_host_csv(data, path):
 
 
 def _export_excel(data, path):
-    """Excel รายงานรวม 4 ชีต: ช่องโหว่ | โฮสต์ | IP Report | สรุป"""
+    """Excel รายงานรวม 5 ชีต: ช่องโหว่ | โฮสต์ | IP Report | สรุป | ThaiCERT 8 กลุ่ม"""
     try:
         import openpyxl
         from openpyxl.styles import (PatternFill, Font, Alignment, Border, Side,
@@ -7390,6 +7408,7 @@ def _export_excel(data, path):
         _export_csv(data, str(path).replace(".xlsx", "_findings.csv"))
         _export_host_csv(data, str(path).replace(".xlsx", "_hosts.csv"))
         _export_ip_csv(data, str(path).replace(".xlsx", "_ip.csv"))
+        _export_thaicert_csv(data, str(path).replace(".xlsx", "_thaicert.csv"))
         return
 
     wb = openpyxl.Workbook()
@@ -7678,6 +7697,46 @@ def _export_excel(data, path):
     for cat, n in sorted(cd.items(), key=lambda x: -x[1]):
         ws4.append(["  " + cat, n])
         ws4.cell(ws4.max_row, 2).alignment = _CENTER
+
+    # ══════════════════════════════════════════════════════════
+    # ชีต 5 — ความครอบคลุม 8 กลุ่มระบบ ThaiCERT
+    # ══════════════════════════════════════════════════════════
+    _tc = _thaicert_coverage(data)
+    if _tc:
+        ws5 = wb.create_sheet("ThaiCERT 8 กลุ่ม")
+        _avg = int(round(sum(x["cap"] for x in _tc) / len(_tc)))
+        ws5.append(["🛡 ความครอบคลุมตามแนวทาง ThaiCERT — 8 กลุ่มระบบที่อาจใช้ PHP"])
+        ws5.cell(1, 1).font = Font(bold=True, size=13, color="1a2a3a")
+        ws5.append([f"ความสามารถ (%) = เพดานการตรวจจากภายนอกแบบไม่ล็อกอิน (remote unauthenticated) โดยประมาณ "
+                    f"— ไม่ใช่ความแม่นของผลลัพธ์รายกรณี · เฉลี่ยทั้ง 8 กลุ่ม ≈ {_avg}%"])
+        ws5.cell(2, 1).font = Font(italic=True, size=9, color="6b7280")
+        ws5.append([])
+        _hdr(ws5, ["#", "กลุ่มระบบ", "ตัวอย่างแพลตฟอร์ม", "ความสามารถ (%)",
+                   "พบในสแกนนี้ (โฮสต์)", "สิ่งที่พบ", "ขอบเขต / จุดอ่อน"],
+             [5, 34, 34, 15, 18, 34, 56])
+        ws5.freeze_panes = "A5"
+        for x in _tc:
+            ws5.append([x["no"], x["name"], x["ex"], x["cap"] / 100.0,
+                        x["hosts"], ", ".join(x["items"]) if x["items"] else "— ไม่พบ", x["note"]])
+            r = ws5.max_row
+            # แถบสีตามระดับความสามารถ: ≥70 เขียว, ≥45 เหลือง, <45 แดงอ่อน
+            fill = (_SAFE_FILL if x["cap"] >= 70 else (_WARN_FILL if x["cap"] >= 45 else _CRIT_FILL))
+            ws5.cell(r, 4).fill = fill
+            ws5.cell(r, 4).font = Font(bold=True)
+            ws5.cell(r, 4).number_format = "0%"
+            ws5.cell(r, 4).alignment = _CENTER
+            ws5.cell(r, 1).alignment = _CENTER
+            ws5.cell(r, 5).alignment = _CENTER
+            for col in (2, 3, 6, 7):
+                ws5.cell(r, col).alignment = _LEFT
+            if not x["hosts"]:
+                ws5.cell(r, 6).font = Font(color="9aa0ab")
+        ws5.append([])
+        ws5.append(["", "ค่าเฉลี่ยความสามารถทั้ง 8 กลุ่ม", "", _avg / 100.0])
+        _ar = ws5.max_row
+        ws5.cell(_ar, 2).font = Font(bold=True)
+        ws5.cell(_ar, 4).font = Font(bold=True); ws5.cell(_ar, 4).number_format = "0%"
+        ws5.cell(_ar, 4).alignment = _CENTER
 
     wb.save(path)
 
@@ -9789,10 +9848,19 @@ def run_generate_report(json_path, output_dir="reports", evidence_dir=None):
     excel_path = unique_output_path(out, f"report_{base_name}_{stamp}", ".xlsx")
     try:
         _export_excel(data, excel_path)
-        print(f"  ✅ Excel (4 ชีต): {excel_path}")
+        print(f"  ✅ Excel (5 ชีต): {excel_path}")
     except Exception as e:
         excel_path = None
         print(f"  ⚠ สร้าง Excel ไม่สำเร็จ: {e}")
+
+    # CSV ความครอบคลุม 8 กลุ่ม ThaiCERT — ออกเสมอ (แม้มี openpyxl) เพื่อให้มีไฟล์ CSV ใช้งานต่อ
+    tc_csv_path = unique_output_path(out, f"report_{base_name}_{stamp}_thaicert", ".csv")
+    try:
+        _export_thaicert_csv(data, str(tc_csv_path))
+        print(f"  ✅ CSV 8 กลุ่ม ThaiCERT: {tc_csv_path}")
+    except Exception as e:
+        tc_csv_path = None
+        print(f"  ⚠ สร้าง CSV 8 กลุ่ม ไม่สำเร็จ: {e}")
 
     html_path = unique_output_path(out, f"dashboard_{base_name}_{stamp}", ".html")
     try:
@@ -9813,6 +9881,7 @@ def run_generate_report(json_path, output_dir="reports", evidence_dir=None):
 
     return {"pdf": str(pdf_path) if pdf_path else None,
             "excel": str(excel_path) if excel_path else None,
+            "thaicert_csv": str(tc_csv_path) if tc_csv_path else None,
             "html": str(html_path) if html_path else None,
             "out_dir": str(out)}
 
@@ -10247,7 +10316,9 @@ def post_action_menu(last_result=None):
         if last_result.get("pdf"):
             print(f"    📕 {c('PDF Report     :', C.B)} {c(last_result['pdf'], C.GRN)}")
         if last_result.get("excel"):
-            print(f"    📊 {c('Excel (4 ชีต) :', C.B)} {c(last_result['excel'], C.GRN)}")
+            print(f"    📊 {c('Excel (5 ชีต) :', C.B)} {c(last_result['excel'], C.GRN)}")
+        if last_result.get("thaicert_csv"):
+            print(f"    📄 {c('CSV 8 กลุ่ม   :', C.B)} {c(last_result['thaicert_csv'], C.GRN)}")
         if last_result.get("html"):
             print(f"    🌐 {c('HTML แดชบอร์ด :', C.B)} {c(last_result['html'], C.GRN)}")
         if last_result.get("out_dir"):
@@ -10257,7 +10328,9 @@ def post_action_menu(last_result=None):
             if rep.get("pdf"):
                 print(f"    📕 {c('PDF Report     :', C.B)} {c(rep['pdf'], C.GRN)}")
             if rep.get("excel"):
-                print(f"    📊 {c('Excel (4 ชีต) :', C.B)} {c(rep['excel'], C.GRN)}")
+                print(f"    📊 {c('Excel (5 ชีต) :', C.B)} {c(rep['excel'], C.GRN)}")
+            if rep.get("thaicert_csv"):
+                print(f"    📄 {c('CSV 8 กลุ่ม   :', C.B)} {c(rep['thaicert_csv'], C.GRN)}")
             if rep.get("html"):
                 print(f"    🌐 {c('HTML แดชบอร์ด :', C.B)} {c(rep['html'], C.GRN)}")
             if rep.get("out_dir"):
