@@ -5898,6 +5898,34 @@ def _chart_toprisk(data, path, thai):
     return True
 
 
+def _chart_thaicert(data, path, thai):
+    """แท่งแนวนอน: จำนวนโฮสต์ที่ตรวจพบในแต่ละกลุ่ม ThaiCERT ทั้ง 8 กลุ่ม
+    สีแท่ง = เพดานความสามารถตรวจจากภายนอก (เขียว≥70 / เหลือง≥45 / แดง<45)"""
+    tc = _thaicert_coverage(data)
+    if not tc:
+        return False
+    tc = list(tc)[::-1]  # กลุ่ม 1 อยู่บนสุด
+    labels = [f"{x['no']}. " + (x["name"][:30] + ("…" if len(x["name"]) > 30 else "")) for x in tc]
+    vals = [x["hosts"] for x in tc]
+    clrs = [(PALETTE["safe"] if x["cap"] >= 70 else (PALETTE["warn"] if x["cap"] >= 45 else PALETTE["vuln"]))
+            for x in tc]
+    fig, ax = plt.subplots(figsize=(7.2, 4.4))
+    bars = ax.barh(labels, vals, color=clrs, edgecolor="white", height=0.64)
+    mx = max(vals + [1])
+    for b, x in zip(bars, tc):
+        txt = f"{x['hosts']} โฮสต์" if x["hosts"] else "—"
+        ax.text(b.get_width() + mx * 0.02, b.get_y() + b.get_height() / 2,
+                f"{txt}  ({x['cap']}%)", va="center", fontsize=8.5, color=PALETTE["muted"])
+    ax.set_xlim(0, mx * 1.28)
+    ax.grid(axis="y", visible=False)
+    for sp in ("top", "right", "left"):
+        ax.spines[sp].set_visible(False)
+    ax.set_title("ตรวจพบตาม 8 กลุ่มระบบ ThaiCERT · จำนวนโฮสต์ (สีแท่ง = เพดานความสามารถตรวจ)"
+                 if thai else "Detections by ThaiCERT 8 groups")
+    fig.tight_layout(); fig.savefig(path, dpi=150, bbox_inches="tight"); plt.close(fig)
+    return True
+
+
 # ─────────────────────────── PDF ───────────────────────────
 
 def _build_pdf(data, charts, output_path, font):
@@ -7168,6 +7196,18 @@ def _build_pdf(data, charts, output_path, font):
             f"(ตัวเลขนี้คือ 'เห็นได้แค่ไหนจากนอกเครือข่าย' ไม่ใช่ความแม่นของผลลัพธ์รายกรณี; "
             f"หลายกลุ่มจะสูงขึ้นมากหากตรวจระดับโฮสต์ด้วย nmap -O / agent / credential)", note))
         story.append(Spacer(1, 0.15 * cm))
+        # ── กราฟ: ตรวจพบตาม 8 กลุ่ม (matplotlib ถ้ามี, ไม่งั้นวาดด้วย ReportLab) ──
+        story.append(P("กราฟ: จำนวนโฮสต์ที่ตรวจพบในแต่ละกลุ่ม (สีแท่ง = เพดานความสามารถตรวจ 🟢≥70 🟠≥45 🔴<45)", h2))
+        if charts.get("thaicert") and os.path.exists(charts["thaicert"]):
+            story.append(Image(charts["thaicert"], width=15 * cm, height=9.2 * cm))
+            story.append(Spacer(1, 0.2 * cm))
+        else:
+            _tcbars = [(f"{x['no']}. {x['name'][:34]}", x["hosts"],
+                        (PALETTE["safe"] if x["cap"] >= 70 else (PALETTE["warn"] if x["cap"] >= 45 else PALETTE["vuln"])))
+                       for x in _tc]
+            for fl in native_bars(_tcbars, label_w=6.2, title=None):
+                story.append(fl)
+            story.append(Spacer(1, 0.25 * cm))
         _thd = [P(x, cellwh) for x in ["กลุ่ม", "ความสามารถ", "พบในสแกนนี้", "ขอบเขต / จุดอ่อน"]]
         _rows = [_thd]
         for x in _tc:
@@ -8177,6 +8217,14 @@ td.mxc{text-align:center;font-weight:800;color:#fff;padding:5px 4px;border:1px s
       </h4>
       <div style="position:relative;height:230px"><canvas id="ch-stacked"></canvas></div>
     </div>
+  </div>
+
+  <!-- แถวที่ 5: ตรวจพบตาม 8 กลุ่มระบบ ThaiCERT -->
+  <div class="chart-box" style="margin-bottom:4px">
+    <h4 style="color:var(--ink);font-size:12px;font-weight:700;margin:0 0 8px;text-transform:uppercase;letter-spacing:.5px">
+      🛡 ตรวจพบตาม 8 กลุ่มระบบ ThaiCERT <span style="font-weight:400;color:var(--muted);font-size:11px">· จำนวนโฮสต์ต่อกลุ่ม (สีแท่ง = เพดานความสามารถตรวจ) · 🔍 คลิกแท่งเพื่อดูรายละเอียดกลุ่ม</span>
+    </h4>
+    <div style="position:relative;height:300px"><canvas id="ch-bar-tc8"></canvas></div>
   </div>
 </div>
 
@@ -9590,6 +9638,52 @@ function initCharts(){
       }
     });
   }
+
+  // 10. ch-bar-tc8 (ตรวจพบตาม 8 กลุ่ม ThaiCERT) — คิดจาก DATA ทั้งหมด ไม่ขึ้นกับตัวกรอง
+  const elTC8 = document.getElementById('ch-bar-tc8');
+  const tc8 = (D.thaicert || []);
+  if(elTC8 && tc8.length){
+    const tc8col = p => p>=70 ? '#2e9e5b' : (p>=45 ? '#f08c00' : '#e03131');
+    window._tc8nos = tc8.map(x=>x.no);
+    window.CHARTS.barTC8 = new Chart(elTC8, {
+      type: 'bar',
+      data: {
+        labels: tc8.map(x=>x.no+'. '+x.name),
+        datasets: [{
+          data: tc8.map(x=>x.hosts),
+          backgroundColor: tc8.map(x=>tc8col(x.cap)),
+          borderRadius: 4, borderSkipped: false, minBarLength: 3
+        }]
+      },
+      options: {
+        indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+        onHover: hoverPtr,
+        onClick: function(evt, elements){
+          if(elements && elements.length){
+            const idx = elements[0].index;
+            const no = (window._tc8nos||[])[idx];
+            if(no){
+              const det = document.getElementById('tc8det_'+no);
+              if(det && det.style.display==='none') togTC8(no);
+              const tbl = document.getElementById('tc8-tbl');
+              if(tbl) tbl.scrollIntoView({behavior:'smooth', block:'center'});
+            }
+          }
+        },
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: function(c){
+            const x = tc8[c.dataIndex] || {};
+            return (x.hosts||0) + ' โฮสต์ · ความสามารถตรวจ ' + (x.cap||0) + '% (คลิกเพื่อดูรายละเอียดกลุ่ม)';
+          } } }
+        },
+        scales: {
+          x: { beginAtZero: true, grid: { color: 'rgba(0,0,0,.07)' }, ticks: { precision: 0 }, title: { display: true, text: 'จำนวนโฮสต์ที่ตรวจพบในกลุ่ม', font: { size: 11 } } },
+          y: { grid: { display: false }, ticks: { font: { size: 10 } } }
+        }
+      }
+    });
+  }
 }
 
 function updateCharts(data){
@@ -9935,11 +10029,14 @@ def run_generate_report(json_path, output_dir="reports", evidence_dir=None):
         charts_dir = out / "charts"
         charts_dir.mkdir(exist_ok=True)
         charts = {k: str(charts_dir / f"{k}_{stamp}.png")
-                  for k in ["gauge", "hosts", "severity", "status", "category", "stacked", "toprisk", "tophosts"]}
+                  for k in ["gauge", "hosts", "severity", "status", "category", "stacked",
+                            "toprisk", "tophosts", "thaicert"]}
         try:
             _chart_gauge(data, charts["gauge"], thai)
             _chart_severity(data, charts["severity"], thai)
             _chart_status(data, charts["status"], thai)
+            if not _chart_thaicert(data, charts["thaicert"], thai):
+                charts.pop("thaicert", None)
             if not _chart_category(data, charts["category"], thai):
                 charts.pop("category", None)
             if not _chart_stacked(data, charts["stacked"], thai):
