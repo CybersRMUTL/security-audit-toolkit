@@ -931,7 +931,7 @@ def _fingerprint(session, base, prefix, timeout, verbose=False):
           "nodejs_frameworks": [], "cdn_proxy": None, "headers": {},
           "os_version": "", "modules": {}, "device": None, "device_version": "",
           "device_category": "", "container_layers": [], "components": [],
-          "composer_packages": []}
+          "composer_packages": [], "waf": None}
     node_vers, node_fws = set(), set()
     php_ev = set()
 
@@ -1513,6 +1513,125 @@ def _probe_framework(session, base, prefix, fp, timeout):
     return out
 
 
+# WAF / security proxy ที่หน้าเว็บ — ตรวจจาก header/cookie (ไม่ยิง request เพิ่ม)
+WAF_SIGS = [
+    ("Cloudflare", [r"cf-ray", r"server:\s*cloudflare", r"__cfduid", r"cf_clearance", r"cf-cache-status"]),
+    ("Sucuri", [r"x-sucuri-id", r"x-sucuri-cache", r"server:\s*sucuri"]),
+    ("Akamai", [r"akamaighost", r"x-akamai", r"akamai-"]),
+    ("Imperva Incapsula", [r"x-iinfo", r"incap_ses", r"visid_incap", r"incapsula"]),
+    ("AWS WAF/ALB", [r"awselb", r"x-amzn-waf", r"x-amz-cf-id"]),
+    ("F5 BIG-IP ASM", [r"x-wa-info", r"bigipserver", r"\bts[0-9a-f]{8}=", r"x-cnection"]),
+    ("ModSecurity", [r"mod_security", r"modsecurity"]),
+    ("Wordfence", [r"x-wordfence", r"wordfence"]),
+    ("Fortinet FortiWeb", [r"fortiweb", r"x-fw-debug"]),
+    ("Barracuda", [r"barracuda", r"barra_counter"]),
+    ("Sucuri CloudProxy", [r"cloudproxy"]),
+    ("StackPath/MaxCDN", [r"stackpath", r"x-sp-"]),
+]
+
+
+def _detect_waf(fp):
+    """ตรวจ WAF/security proxy จาก fp['headers'] — เก็บชื่อใน fp['waf'] (ไม่ยิง request เพิ่ม)"""
+    if fp.get("waf"):
+        return fp["waf"]
+    H = fp.get("headers", {}) or {}
+    blob = " ".join(f"{k}: {v}" for k, vs in H.items() for v in vs).lower()
+    blob += " " + " ".join(H.get("set-cookie", [])).lower()
+    for name, sigs in WAF_SIGS:
+        if any(re.search(s, blob) for s in sigs):
+            fp["waf"] = name
+            return name
+    return None
+
+
+def _probe_tls(host, port, timeout):
+    """ตรวจ TLS จริงด้วย handshake: cert หมดอายุ/ใกล้หมด/self-signed + รองรับโปรโตคอลอ่อน (TLS 1.0/1.1)
+    คืน {TLS-*: finding}"""
+    import ssl
+    import socket as _sk
+    out = {}
+    t = min(timeout, 6.0)
+
+    def _finding(key, name, sev, status, reason, hc):
+        out[key] = {"cve": key, "name": name, "severity": sev, "trigger": "ตรวจ TLS handshake",
+                    "host_check": hc, "status": status, "reason": reason}
+
+    # 1) เชื่อมต่อแบบ verify → อ่าน cert + โปรโตคอลที่ตกลงได้
+    cert, verify_err = None, None
+    try:
+        ctx = ssl.create_default_context()
+        with _sk.create_connection((host, port), timeout=t) as s:
+            with ctx.wrap_socket(s, server_hostname=host) as ss:
+                cert = ss.getpeercert()
+    except ssl.SSLCertVerificationError as e:
+        verify_err = str(e)
+    except Exception:
+        return out  # เชื่อมต่อ TLS ไม่ได้ (อาจไม่ใช่ HTTPS) — ข้าม
+
+    # ถ้า verify ไม่ผ่าน ลองอ่าน cert แบบไม่ verify เพื่อระบุสาเหตุ
+    if cert is None:
+        try:
+            ctx2 = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            ctx2.check_hostname = False
+            ctx2.verify_mode = ssl.CERT_NONE
+            with _sk.create_connection((host, port), timeout=t) as s:
+                with ctx2.wrap_socket(s, server_hostname=host) as ss:
+                    cert = ss.getpeercert(binary_form=False) or {}
+        except Exception:
+            cert = {}
+        emsg = (verify_err or "").lower()
+        if "self signed" in emsg or "self-signed" in emsg:
+            _finding("TLS-SelfSigned", "ใบรับรอง TLS แบบ self-signed", "Medium", "vulnerable-conditions",
+                     "ใบรับรองเป็น self-signed — ไคลเอนต์เตือน/ถูกปลอมได้ง่าย ควรใช้ CA ที่เชื่อถือ (เช่น Let's Encrypt)",
+                     "ออกใบรับรองจาก CA ที่เชื่อถือและตั้งค่า chain ให้ครบ")
+        elif "hostname mismatch" in emsg or "doesn't match" in emsg:
+            _finding("TLS-HostnameMismatch", "ชื่อในใบรับรอง TLS ไม่ตรงกับโดเมน", "Medium", "vulnerable-conditions",
+                     f"ใบรับรองไม่ครอบคลุมโฮสต์นี้ ({verify_err[:80]}) — เบราว์เซอร์จะเตือน",
+                     "ออกใบรับรองที่มี SAN ตรงกับโดเมนที่ให้บริการ")
+        elif "expired" in emsg:
+            _finding("TLS-Expired", "ใบรับรอง TLS หมดอายุ", "High", "vulnerable",
+                     f"ใบรับรองหมดอายุแล้ว ({verify_err[:80]}) — ผู้ใช้เข้าไม่ได้/ถูกเตือน", "ต่ออายุใบรับรองทันที")
+        else:
+            _finding("TLS-VerifyFailed", "ตรวจสอบใบรับรอง TLS ไม่ผ่าน", "Medium", "vulnerable-conditions",
+                     f"verify ไม่ผ่าน: {verify_err[:100]}", "ตรวจสอบใบรับรอง/chain/วันหมดอายุ")
+
+    # 2) วันหมดอายุ (เมื่ออ่าน notAfter ได้)
+    na = (cert or {}).get("notAfter")
+    if na:
+        try:
+            days = (ssl.cert_time_to_seconds(na) - time.time()) / 86400.0
+            if days < 0:
+                _finding("TLS-Expired", "ใบรับรอง TLS หมดอายุ", "High", "vulnerable",
+                         f"ใบรับรองหมดอายุแล้ว (notAfter {na})", "ต่ออายุใบรับรองทันที")
+            elif days < 30:
+                _finding("TLS-Expiring", "ใบรับรอง TLS ใกล้หมดอายุ", "Medium", "medium-risk",
+                         f"ใบรับรองจะหมดอายุใน {int(days)} วัน (notAfter {na})", "ตั้งต่ออายุอัตโนมัติ (เช่น certbot)")
+        except Exception:
+            pass
+
+    # 3) โปรโตคอลอ่อน — ลองบังคับ TLS 1.0 / 1.1 (best-effort; OpenSSL ใหม่อาจ offer ไม่ได้)
+    for label, ver, key in (("TLS 1.0", getattr(ssl.TLSVersion, "TLSv1", None), "TLS-TLS10"),
+                            ("TLS 1.1", getattr(ssl.TLSVersion, "TLSv1_1", None), "TLS-TLS11")):
+        if ver is None:
+            continue
+        try:
+            c = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            c.check_hostname = False
+            c.verify_mode = ssl.CERT_NONE
+            c.minimum_version = ver
+            c.maximum_version = ver
+            with _sk.create_connection((host, port), timeout=t) as s:
+                with c.wrap_socket(s, server_hostname=host) as ss:
+                    neg = ss.version()
+            if neg:  # handshake สำเร็จ = เซิร์ฟเวอร์ยอมรับโปรโตคอลอ่อน
+                _finding(key, f"เซิร์ฟเวอร์ยอมรับ {label} (โปรโตคอลอ่อน)", "Medium", "medium-risk",
+                         f"เซิร์ฟเวอร์ยังรับการเชื่อมต่อ {label} ซึ่งเลิกใช้แล้ว (PCI/มาตรฐานห้าม) ควรปิดให้เหลือ TLS 1.2/1.3",
+                         f"ปิด {label} ที่ web server (ssl_protocols TLSv1.2 TLSv1.3)")
+        except Exception:
+            pass  # เชื่อมต่อไม่ได้ = ไม่รองรับ (ดี) หรือ client ทำ TLS เก่าไม่ได้
+    return out
+
+
 def _audit_security_headers(fp, base):
     """ตรวจ HTTP security headers ที่ขาด/อ่อน จาก fp['headers'] (ไม่ยิง request เพิ่ม)
     คืน {HEADER-*: finding} — รวมเป็นรายการเดียวเพื่อไม่ให้ท่วมรายงาน + แยกเคส cookie"""
@@ -1577,6 +1696,10 @@ def _audit_security_headers(fp, base):
 def _stack_profile(fp, cms_info):
     """สรุปสแตกเป็นชั้น ๆ สำหรับแสดงผล: OS → device → server → container → runtime → app"""
     layers = []
+    if fp.get("waf"):
+        layers.append(f"WAF: {fp['waf']}")
+    if fp.get("cdn_proxy") and fp.get("cdn_proxy") != fp.get("waf"):
+        layers.append(f"CDN: {fp['cdn_proxy']}")
     if fp.get("device"):
         layers.append(f"{fp['device']}" + (f" {fp['device_version']}" if fp.get("device_version") else ""))
     osv = fp.get("os_version") or (fp.get("os") if fp.get("os") != "Unknown" else "")
@@ -3011,7 +3134,12 @@ def scan_single_target(target_str, opts, idx=1, total=1):
     component_cves = _analyze_components(fp)
     exposure_cves = _probe_exposures(session, base, path_prefix, opts["timeout"], fp=fp)
     framework_cves = _probe_framework(session, base, path_prefix, fp, opts["timeout"])
+    _detect_waf(fp)
     header_cves = _audit_security_headers(fp, base)
+    tls_cves = {}
+    if base.startswith("https://"):
+        _tp = urlparse(base)
+        tls_cves = _probe_tls(_tp.hostname or "", _tp.port or 443, opts["timeout"])
     fp["stack_layers"] = _stack_profile(fp, cms_info)
     _v and fp["stack_layers"] and print(f"    Stack: {' → '.join(fp['stack_layers'])}")
     online_cves = _online_cve_scan(fp, cms_info, opts)
@@ -3074,12 +3202,12 @@ def scan_single_target(target_str, opts, idx=1, total=1):
              list(app_cves.values()) + list(device_cves.values()) +
              list(component_cves.values()) + list(exposure_cves.values()) +
              list(framework_cves.values()) + list(header_cves.values()) +
-             list(online_cves.values()))
+             list(tls_cves.values()) + list(online_cves.values()))
 
     if selected:
         all_r = [r for r in all_r if r.get("cve") in selected
                  or r.get("cve", "").startswith(("UNSUPPORTED-", "APP-", "DEVICE-", "COMP-",
-                                                  "EXPOSURE-", "FRAMEWORK-", "HEADER-", "ONLINE-"))]
+                                                  "EXPOSURE-", "FRAMEWORK-", "HEADER-", "TLS-", "ONLINE-"))]
     vuln_cnt = sum(1 for r in all_r if r["status"] in ("vulnerable", "high-risk", "likely-vulnerable", "unpatched"))
     warn_cnt = sum(1 for r in all_r if r["status"] in ("medium-risk", "vulnerable-version", "vulnerable-conditions"))
     crit = vuln_cnt + warn_cnt
@@ -3115,7 +3243,7 @@ def scan_single_target(target_str, opts, idx=1, total=1):
         "app_cves": app_cves, "device_cves": device_cves,
         "component_cves": component_cves, "exposure_cves": exposure_cves,
         "framework_cves": framework_cves, "header_cves": header_cves,
-        "online_cves": online_cves,
+        "tls_cves": tls_cves, "online_cves": online_cves,
         "summary": {"total_cves": len(all_r), "detected": crit,
                     "vulnerable": vuln_cnt, "warning": warn_cnt,
                     "critical": crit, "safe": safe, "unknown": unknown},
@@ -4971,6 +5099,8 @@ def _host_findings(h):
         out.append({**d, "category": "Framework", "target": tgt})
     for _cve, d in (h.get("header_cves") or {}).items():
         out.append({**d, "category": "Headers", "target": tgt})
+    for _cve, d in (h.get("tls_cves") or {}).items():
+        out.append({**d, "category": "TLS", "target": tgt})
     for _cve, d in (h.get("online_cves") or {}).items():
         out.append({**d, "category": "Online CVE", "target": tgt})
     return out
