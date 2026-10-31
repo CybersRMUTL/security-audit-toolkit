@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- LAN scanning overhaul for accuracy and coverage:
+  - Non-standard web ports are now found and scanned. Host discovery runs in
+    two phases — a fast liveness check, then a full web/admin/device port
+    enumeration on live hosts (wider list in LAN mode) — and every open port
+    becomes its own deep-scan target, so a web UI on an odd port (8443, 10000,
+    5000, …) is no longer missed.
+  - MAC/vendor detection hardened: in-process cross-platform ARP read
+    (`arp`/`ip neigh`, skips incomplete entries), ARP primed with a TCP touch
+    (no ICMP needed), an offline OUI table for common vendors, and MAC-vendor →
+    device/OS inference (Synology→NAS/Linux, Hikvision→camera, etc.) that fills
+    the OS/device fields when HTTP fingerprinting is silent.
+  - Clear one-time guidance when LAN detection is blocked: install `nmap`
+    (`brew install nmap`, run with sudo) for real OS detection, and grant
+    python/Terminal the macOS "Local Network" permission so the ARP table (and
+    thus MAC → vendor/device) is visible.
+
+### Known limitations
+- On macOS 15+/26, the OS hides the ARP table from the Python process unless it
+  has the "Local Network" privacy permission, so MAC/vendor/device-by-MAC can
+  come back empty even on the LAN (TCP scanning still works). `nmap -O` OS
+  detection needs nmap installed and root.
 - Fast host-discovery pre-pass for CIDR / multi-host scans (on by default,
   `--no-discover` or the advanced prompt to turn it off). Instead of waiting
   out the full HTTP timeout on every dead IP, it TCP-knocks the common web

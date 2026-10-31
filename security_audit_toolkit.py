@@ -1672,6 +1672,19 @@ def _is_private_ip(ip):
         return None
 
 
+# คำแนะนำโหมด LAN แบบ "แสดงครั้งเดียวต่อการสแกน" (กันสแปมตอนหลายโฮสต์/หลายเธรด)
+_LAN_HINTS = {}
+_LAN_HINT_LOCK = Lock()
+
+
+def _lan_hint(kind, msg):
+    with _LAN_HINT_LOCK:
+        if _LAN_HINTS.get(kind):
+            return
+        _LAN_HINTS[kind] = True
+    print(msg)
+
+
 def _probe_os(host, fp, timeout, lan=False):
     """เสริมการระบุ OS แบบหลายแหล่ง + ติดป้ายที่มา/ความเชื่อมั่น (ไม่รับประกันถูก 100%):
     1) Server header (เชื่อถือสูง) 2) nmap -O ถ้ามี (ปานกลาง-สูง +%) 3) TTL heuristic
@@ -1686,6 +1699,9 @@ def _probe_os(host, fp, timeout, lan=False):
         return
     # 2) nmap -O (gold standard — ต้องติดตั้ง nmap + สิทธิ์ root; ให้ผลเป็น % ความมั่นใจ)
     #    โหมด LAN: ตัด -Pn ออกให้ nmap ใช้ ARP ping ค้นโฮสต์ (บนวงเดียวกันแม่นและได้ MAC fingerprint)
+    if lan and not shutil.which("nmap"):
+        _lan_hint("nmap", "  ⚠ OS detection: ไม่พบ nmap — ติดตั้งด้วย `brew install nmap` (แล้วรันด้วย sudo) "
+                          "เพื่อระบุ OS แม่นยำ; ตอนนี้ใช้ Server header + TTL + ยี่ห้อ MAC เท่าที่ได้")
     if shutil.which("nmap"):
         cmd = (["nmap", "-O", "--osscan-guess", "--host-timeout", "25s", host] if lan
                else ["nmap", "-O", "--osscan-guess", "-Pn", "--host-timeout", "20s", host])
@@ -1763,37 +1779,148 @@ def _analyze_os_kernel(fp):
                       f"ตรวจจากภายนอกไม่ได้ ต้องเข้าไปตรวจ `uname -r` บนเครื่อง"}}
 
 
-def _probe_mac(ip, fp, opts, lan=False):
-    """ดึง MAC + ผู้ผลิต (OUI) — ได้เฉพาะเป้าหมายในวง LAN เดียวกัน (IP ส่วนตัว) ผ่าน ARP cache
-    เป้าหมายบนอินเทอร์เน็ตจะข้าม (MAC เป็น Layer 2 เห็นข้ามเราเตอร์ไม่ได้)
-    โหมด LAN: ส่ง ping ก่อนเพื่อ prime ARP cache + ค้นผู้ผลิต OUI เสมอ (ไม่ต้องรอ opt-in online)"""
-    import subprocess
-    if not ip or _is_private_ip(ip) is not True:
-        return  # นอกวง LAN → ARP ไม่ได้ MAC จริงของเป้าหมาย
-    # nmap (โหมด LAN) อาจเติม MAC ให้แล้ว — ถ้ายังไม่มี ค่อยอ่านจาก ARP
-    if not fp.get("mac"):
+# OUI offline (เฉพาะ prefix ที่มั่นใจสูง — ที่เหลือใช้ macvendors.com ออนไลน์เติม)
+OUI_OFFLINE = {
+    "001132": "Synology Incorporated", "0011d8": "ASUSTek",
+    "b827eb": "Raspberry Pi Foundation", "dca632": "Raspberry Pi Trading",
+    "e45f01": "Raspberry Pi Trading", "28cdc1": "Raspberry Pi Trading",
+    "000c29": "VMware, Inc.", "005056": "VMware, Inc.", "001c14": "VMware, Inc.",
+    "000569": "VMware, Inc.", "00155d": "Microsoft Corporation",
+    "080027": "PCS Systemtechnik (VirtualBox)", "525400": "QEMU/KVM (QEMU virtual NIC)",
+    "00089b": "QNAP Systems", "245ebe": "QNAP Systems",
+    "00156d": "Ubiquiti Networks", "24a43c": "Ubiquiti Networks", "fcecda": "Ubiquiti Networks",
+    "0c4242": "Ubiquiti Networks", "000c42": "MikroTik", "488f5a": "MikroTik",
+    "64d154": "MikroTik", "cc2de0": "MikroTik", "dc2c6e": "MikroTik",
+    "0040f4": "Cameo (CCTV)", "00408c": "Axis Communications", "accc8e": "Axis Communications",
+    "c056e3": "Hikvision", "4419b6": "Hikvision", "bcad28": "Hikvision",
+    "4cbd8f": "Hikvision", "2857be": "Hikvision", "a44319": "Hikvision",
+    "3cef8c": "Dahua", "9002a9": "Dahua", "14a78b": "Dahua",
+    "00090f": "Fortinet", "906cac": "Fortinet", "001b78": "Hewlett Packard",
+    "3cd92b": "Hewlett Packard", "001422": "Dell Inc.", "b8ca3a": "Dell Inc.",
+    "0090a9": "Western Digital", "001d0f": "TP-Link", "50c7bf": "TP-Link",
+    "00095b": "Netgear", "20e52a": "Netgear",
+}
+
+# vendor (จากชื่อ) → (device_category, os_hint) — เดาแม่นจาก "ชื่อผู้ผลิต" ไม่พึ่ง prefix ที่เปราะ
+VENDOR_PROFILE = [
+    ("synology", "NAS", "Linux (Synology DSM)"),
+    ("qnap", "NAS", "Linux (QNAP QTS)"),
+    ("western digital", "NAS", "Linux (WD My Cloud)"),
+    ("asustor", "NAS", "Linux (ADM)"),
+    ("hikvision", "CCTV/Camera", "Embedded Linux (Hikvision)"),
+    ("dahua", "CCTV/Camera", "Embedded Linux (Dahua)"),
+    ("axis", "CCTV/Camera", "Embedded Linux (Axis)"),
+    ("reolink", "CCTV/Camera", "Embedded Linux"),
+    ("uniview", "CCTV/Camera", "Embedded Linux"),
+    ("vivotek", "CCTV/Camera", "Embedded Linux"),
+    ("cameo", "CCTV/Camera", "Embedded Linux"),
+    ("ubiquiti", "Network", "Linux (UniFi/EdgeOS)"),
+    ("mikrotik", "Network", "RouterOS (Linux)"),
+    ("cisco", "Network", "Cisco IOS"),
+    ("tp-link", "Network", ""), ("netgear", "Network", ""),
+    ("zyxel", "Network", ""), ("draytek", "Network", ""), ("aruba", "Network", ""),
+    ("fortinet", "Firewall", "FortiOS"), ("palo alto", "Firewall", "PAN-OS"),
+    ("sophos", "Firewall", ""), ("watchguard", "Firewall", ""),
+    ("apple", "Endpoint", "macOS / iOS"),
+    ("raspberry pi", "SBC/IoT", "Linux (Raspberry Pi OS)"),
+    ("vmware", "Virtual Machine", "Hypervisor guest (VMware)"),
+    ("qemu", "Virtual Machine", "Linux/KVM guest"),
+    ("virtualbox", "Virtual Machine", "VirtualBox guest"),
+    ("pcs systemtechnik", "Virtual Machine", "VirtualBox guest"),
+    ("microsoft", "Virtual Machine", "Windows / Hyper-V"),
+    ("hewlett", "Server/Printer", ""), ("dell", "Server", ""),
+    ("supermicro", "Server", ""), ("intel", "Endpoint/Server", ""),
+    ("brother", "Printer", ""), ("canon", "Printer", ""), ("epson", "Printer", ""),
+    ("ricoh", "Printer", ""), ("fuji xerox", "Printer", ""),
+]
+
+
+def _mac_vendor_lookup(mac, online=True):
+    """OUI → ผู้ผลิต: ตารางออฟไลน์ก่อน (เร็ว/ไม่ต้องเน็ต) แล้วค่อย macvendors.com ถ้าอนุญาต"""
+    if not mac:
+        return ""
+    pfx = mac.replace(":", "").lower()[:6]
+    if pfx in OUI_OFFLINE:
+        return OUI_OFFLINE[pfx]
+    if online:
         try:
-            if lan:  # prime ARP cache ด้วย ping 1 ครั้ง (เป้าหมายใน LAN อาจยังไม่อยู่ใน cache)
-                subprocess.run(["ping", "-c", "1", "-W", "1", ip],
-                               capture_output=True, text=True, timeout=3)
-        except Exception:
-            pass
-        try:
-            r = subprocess.run(["arp", "-n", ip], capture_output=True, text=True, timeout=3)
-            mm = re.search(r"\b([0-9a-fA-F]{1,2}(?::[0-9a-fA-F]{1,2}){5})\b", r.stdout or "")
-            if mm:
-                fp["mac"] = ":".join(x.zfill(2) for x in mm.group(1).split(":")).lower()
-        except Exception:
-            pass
-    # OUI → ผู้ผลิต (ออนไลน์ macvendors.com ฟรี ไม่ต้อง key) — โหมด LAN เปิดเสมอ, นอกนั้นตาม opt-in online
-    if fp.get("mac") and not fp.get("mac_vendor") and (lan or opts.get("online_cve")):
-        try:
-            vr = requests.get(f"https://api.macvendors.com/{fp['mac']}", timeout=6,
+            vr = requests.get(f"https://api.macvendors.com/{mac}", timeout=6,
                               headers={"User-Agent": "rmut-cert-toolkit"})
             if vr.status_code == 200 and vr.text.strip():
-                fp["mac_vendor"] = vr.text.strip()[:60]
+                return vr.text.strip()[:60]
         except Exception:
             pass
+    return ""
+
+
+def _vendor_profile(vendor):
+    """ชื่อผู้ผลิต → (device_category, os_hint) — ใช้เดาชนิดอุปกรณ์/OS เมื่อ HTTP เงียบ"""
+    low = (vendor or "").lower()
+    for sub, cat, os_hint in VENDOR_PROFILE:
+        if sub in low:
+            return cat, os_hint
+    return "", ""
+
+
+def _read_mac(ip):
+    """อ่าน MAC ของ IP จาก ARP cache — ครอบคลุม macOS/Linux (arp -a, arp <ip>, ip neigh)
+    ข้ามรายการ (incomplete); คืน MAC ปกติ (zero-padded, lowercase) หรือ '' """
+    import subprocess
+    _MAC_RE = re.compile(r"\b([0-9a-fA-F]{1,2}(?::[0-9a-fA-F]{1,2}){5})\b")
+    cmds = [["arp", "-n", ip], ["arp", ip], ["arp", "-a"], ["ip", "neigh", "show", ip], ["ip", "neigh"]]
+    for cmd in cmds:
+        try:
+            out = subprocess.run(cmd, capture_output=True, text=True, timeout=3).stdout or ""
+        except Exception:
+            continue
+        for line in out.splitlines():
+            if ip not in line or "incomplete" in line.lower():
+                continue
+            m = _MAC_RE.search(line)
+            if m and m.group(1).lower() not in ("00:00:00:00:00:00", "ff:ff:ff:ff:ff:ff"):
+                return ":".join(x.zfill(2) for x in m.group(1).split(":")).lower()
+    return ""
+
+
+def _probe_mac(ip, fp, opts, lan=False):
+    """ดึง MAC + ผู้ผลิต (OUI) + เดาอุปกรณ์/OS — ได้เฉพาะเป้าหมายในวง LAN เดียวกัน (IP ส่วนตัว)
+    prime ARP ด้วย TCP connect (ไม่พึ่ง ICMP → ปิดปิงก็ยังได้ MAC); OUI ออฟไลน์ก่อน แล้วออนไลน์เติม"""
+    import socket
+    if not ip or _is_private_ip(ip) is not True:
+        return  # นอกวง LAN → ARP ไม่ได้ MAC จริงของเป้าหมาย
+    if not fp.get("mac"):            # nmap/discovery อาจเติมให้แล้ว
+        fp["mac"] = _read_mac(ip)
+    if not fp.get("mac"):            # ยังไม่มี → prime ARP ด้วย TCP touch แล้วอ่านซ้ำ
+        for p in (80, 443, 8080, 22):
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(0.6)
+            try:
+                s.connect_ex((ip, p))
+            except Exception:
+                pass
+            finally:
+                s.close()
+        fp["mac"] = _read_mac(ip)
+    if not fp.get("mac"):
+        # เข้าถึงโฮสต์ได้แต่อ่าน MAC ไม่ได้ → บน macOS มักเป็นเพราะสิทธิ์ 'Local Network' ของ python/Terminal
+        if sys.platform == "darwin":
+            _lan_hint("mac", "  ⚠ MAC/อุปกรณ์: อ่านตาราง ARP ไม่ได้ (เชื่อมต่อ TCP ได้แต่ระบบซ่อนตาราง ARP) — "
+                             "macOS ต้องอนุญาต 'Local Network' ให้ python/Terminal ที่ System Settings › "
+                             "Privacy & Security › Local Network แล้วรันใหม่ จึงจะได้ MAC→ยี่ห้อ/อุปกรณ์")
+        return
+    # OUI → ผู้ผลิต (โหมด LAN เปิดเสมอ, นอกนั้นตาม opt-in online)
+    if not fp.get("mac_vendor"):
+        fp["mac_vendor"] = _mac_vendor_lookup(fp["mac"], online=(lan or opts.get("online_cve")))
+    # เดาอุปกรณ์/OS จากผู้ผลิต — เติมเฉพาะช่องที่ HTTP fingerprint ยังเงียบ (ไม่ทับของที่ตรวจเจอจริง)
+    cat, os_hint = _vendor_profile(fp.get("mac_vendor", ""))
+    if cat and not fp.get("device"):
+        fp["device"] = f"{fp['mac_vendor']} ({cat})"
+        fp["device_category"] = cat
+        fp["device_source"] = "MAC/OUI"
+    if os_hint and fp.get("os", "Unknown") in ("", "Unknown"):
+        fp["os"] = os_hint
+        fp["os_source"] = "MAC vendor (เดาจากผู้ผลิต)"
+        fp["os_confidence"] = "ปานกลาง (อนุมานจาก OUI)"
 
 
 def _audit_security_headers(fp, base):
@@ -3680,67 +3807,117 @@ def _hlabel(t):
 
 
 # พอร์ตเว็บ/อุปกรณ์ที่ใช้ "เคาะ" หาโฮสต์มีชีวิต (TCP connect — ไม่พึ่ง ICMP จึงใช้ได้แม้ปิดปิง)
-_DISCOVER_PORTS = [80, 443, 8080, 8443]
-_DISCOVER_PORTS_LAN = [80, 443, 8080, 8443, 8000, 8081, 5000, 5001, 7001, 10000, 81, 9000]
+# พอร์ตเช็ก "มีชีวิตไหม" (เร็ว — เจอพอร์ตแรกก็พอ)
+_LIVENESS_PORTS = [80, 443, 8080, 8443, 22]
+# พอร์ตเว็บ/แอดมิน/อุปกรณ์ ที่จะ "ไล่หาให้ครบ" บนโฮสต์ที่มีชีวิต แล้วสแกนทุกพอร์ตที่เปิด (แก้ปัญหา 'ใช้พอร์ตอื่นจะไม่เจอ')
+_WEB_PORTS = [80, 443, 8080, 8443, 8000, 8008, 8888, 10000, 2082, 2083, 2086, 2087, 2095, 2096]
+_WEB_PORTS_LAN = _WEB_PORTS + [81, 82, 88, 591, 7001, 7080, 8081, 8082, 8088, 8181, 8800,
+                               9000, 9080, 9090, 9091, 9443, 10443, 4443, 5000, 5001, 3000,
+                               5601, 7474, 8443, 8834, 9200, 61208]
 
 
-def _host_alive(target, ports, timeout):
-    """เคาะ TCP ไปยังพอร์ตเว็บ/อุปกรณ์ — คืน (alive, open_port|None)
-    ใช้ TCP connect (ไม่ใช้ ICMP) → ปิดปิงก็ยังตรวจเจอ; เจอพอร์ตเปิดพอร์ตแรกก็พอ"""
+def _host_liveness(target, ports, timeout):
+    """เช็กมีชีวิต (เจอพอร์ตเปิดพอร์ตแรกก็พอ) — คืน (ip|None, alive)"""
     import socket
     h = target.replace("https://", "").replace("http://", "").split("/")[0].split(":")[0]
     try:
         ip = socket.gethostbyname(h)
     except Exception:
-        return False, None
+        return None, False
     for p in ports:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(timeout)
         try:
             if s.connect_ex((ip, p)) == 0:
-                return True, p
+                return ip, True
         except Exception:
             pass
         finally:
             s.close()
-    return False, None
+    return ip, False
+
+
+def _port_target(base_target, ip_or_host, port):
+    """สร้าง URL เป้าหมายต่อพอร์ต — 80→http, 443→https, อื่นๆ→https (สแกนมี fallback http ในตัว)"""
+    host = base_target.replace("https://", "").replace("http://", "").split("/")[0].split(":")[0]
+    if port == 80:
+        return f"http://{host}"
+    if port == 443:
+        return f"https://{host}"
+    return f"https://{host}:{port}"
 
 
 def _discover_alive(targets, opts):
-    """Host discovery แบบเร็ว: เคาะพอร์ตเว็บทุกเป้าหมายแบบขนานสูง แล้วคัดเฉพาะที่ 'มีพอร์ตเว็บเปิด'
-    ออกไป deep-scan — ข้ามไอพีตายโดยไม่ต้องรอ HTTP timeout 8s ต่อไอพี
-    คืน (alive_targets, dead_results) โดย dead ถูกบันทึกเป็น 'เข้าไม่ถึง' เพื่อให้ยอดรวมในรายงานตรง"""
+    """Host discovery 2 เฟส:
+      เฟส 1 — เช็กมีชีวิต (เจอพอร์ตเว็บเปิดพอร์ตแรกก็พอ) ข้ามไอพีตายเร็ว ไม่รอ HTTP timeout 8s
+      เฟส 2 — บนโฮสต์ที่มีชีวิต 'ไล่หาพอร์ตเว็บให้ครบ' แล้วสแกนทุกพอร์ตที่เปิด (เจอเว็บบนพอร์ตแปลก ๆ ด้วย)
+    ใช้ TCP connect ล้วน (ไม่พึ่ง ICMP → ปิดปิงก็ใช้ได้)
+    คืน (scan_targets, dead_results); dead บันทึกเป็น 'เข้าไม่ถึง' เพื่อให้ยอดรวมในรายงานตรง"""
     lan = opts.get("scan_mode") == "lan"
-    ports = _DISCOVER_PORTS_LAN if lan else _DISCOVER_PORTS
+    enum_ports = _WEB_PORTS_LAN if lan else _WEB_PORTS
     dt = 0.6 if lan else 1.0
     total = len(targets)
     workers = min(128, max(8, total))
-    print(f"  🔎 Host discovery: เคาะพอร์ตเว็บ {ports} (TCP · ไม่พึ่งปิง) บน {total} เป้าหมาย "
-          f"ด้วย {workers} threads · timeout {dt}s/พอร์ต …")
-    alive, dead = [], []
+    print(f"  🔎 Host discovery (TCP · ไม่พึ่งปิง) บน {total} เป้าหมาย ด้วย {workers} threads · "
+          f"timeout {dt}s/พอร์ต — เฟส 1: เช็กมีชีวิต …")
+    alive_ips, dead = [], []
     done = {"n": 0}
     dlock = Lock()
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        futs = {ex.submit(_host_alive, t[0], ports, dt): t for t in targets}
+        futs = {ex.submit(_host_liveness, t[0], _LIVENESS_PORTS, dt): t for t in targets}
         for f in as_completed(futs):
             t = futs[f]
             try:
-                ok, _port = f.result()
+                ip, ok = f.result()
             except Exception:
-                ok = False
+                ip, ok = None, False
             if ok:
-                alive.append(t)
+                alive_ips.append((t, ip))
             else:
                 dead.append({"target": t[0], "reachable": False,
                              "skipped_discovery": True, "_elapsed": 0,
                              "error": "ไม่พบพอร์ตเว็บเปิด (ข้ามจาก host discovery)"})
             with dlock:
                 done["n"] += 1
-                sys.stdout.write(f"\r\033[K  🔎 ตรวจแล้ว {done['n']}/{total} · พบมีชีวิต {len(alive)}")
+                sys.stdout.write(f"\r\033[K  🔎 เฟส 1: ตรวจแล้ว {done['n']}/{total} · มีชีวิต {len(alive_ips)}")
                 sys.stdout.flush()
-    print(f"\r\033[K  ✅ Host discovery เสร็จ: มีพอร์ตเว็บเปิด {len(alive)}/{total} "
-          f"(ข้าม {len(dead)} ไอพีที่ไม่มีเว็บ) → สแกนเชิงลึกเฉพาะ {len(alive)} โฮสต์")
-    return alive, dead
+    # เฟส 2 — ไล่พอร์ตเว็บให้ครบ: ยิง (โฮสต์ × พอร์ต) เป็น task แบนขนานกันทั้งหมด → เร็วสุด
+    print(f"\r\033[K  🔎 เฟส 2: ไล่พอร์ตเว็บให้ครบบน {len(alive_ips)} โฮสต์มีชีวิต "
+          f"({len(enum_ports)} พอร์ต/โฮสต์) …")
+    import socket as _sock
+    open_map = {ip: set() for (_t, ip) in alive_ips}
+
+    def _probe1(ip, port):
+        s = _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM)
+        s.settimeout(dt)
+        try:
+            return ip, port, (s.connect_ex((ip, port)) == 0)
+        except Exception:
+            return ip, port, False
+        finally:
+            s.close()
+
+    tasks = [(ip, p) for (_t, ip) in alive_ips for p in enum_ports]
+    if tasks:
+        with ThreadPoolExecutor(max_workers=min(256, len(tasks))) as ex:
+            for f in as_completed([ex.submit(_probe1, ip, p) for (ip, p) in tasks]):
+                ip, port, ok = f.result()
+                if ok:
+                    open_map[ip].add(port)
+    scan_targets, svc_count = [], 0
+    for (t, ip) in alive_ips:
+        ports = sorted(open_map.get(ip) or {443})  # มีชีวิตแต่ไล่ไม่เจอ → สแกน https ปกติ
+        seen = set()
+        for p in ports:
+            url = _port_target(t[0], ip, p)
+            if url not in seen:
+                seen.add(url)
+                scan_targets.append((url, t[1]))
+                svc_count += 1
+    print(f"  ✅ Host discovery เสร็จ: มีชีวิต {len(alive_ips)}/{total} โฮสต์ · "
+          f"พบ {svc_count} web service (รวมพอร์ตนอกมาตรฐาน) · ข้าม {len(dead)} ไอพีที่ไม่มีเว็บ "
+          f"→ สแกนเชิงลึก {svc_count} รายการ")
+    return scan_targets, dead
 
 
 def run_scan(targets, opts):
