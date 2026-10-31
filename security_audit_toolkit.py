@@ -8483,7 +8483,10 @@ def _osascript_choose(kind, title, start_dir, exts=None):
                 quoted = ", ".join('"' + e.lstrip(".") + '"' for e in exts)
                 type_clause = f" of type {{{quoted}}}"
             script = f'POSIX path of (choose file with prompt "{safe_title}" default location (POSIX file "{loc}"){type_clause}'
-        res = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=120)
+        # นำหน้าด้วย `activate` เพื่อดึง dialog ขึ้นมาหน้าสุดทันที (ไม่ให้ไปซ่อนหลัง Terminal)
+        # `activate` แบบ top-level ใช้สิทธิ์ของ osascript เอง ไม่ต้องขอ Automation permission
+        res = subprocess.run(["osascript", "-e", "activate", "-e", script],
+                             capture_output=True, text=True, timeout=600)
         if res.returncode == 0 and res.stdout.strip():
             return res.stdout.strip()
         # returncode != 0 : แยกกรณี "ผู้ใช้กดยกเลิก" (-128) ออกจากข้อผิดพลาดจริง
