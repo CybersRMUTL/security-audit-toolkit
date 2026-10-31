@@ -5316,6 +5316,115 @@ def _tech_inventory(fp, cms_info, findings):
     return rows
 
 
+# ── ThaiCERT / NCSA : 8 กลุ่มระบบที่อาจใช้ PHP (อ้างอิงอินโฟกราฟิก "ตรวจสอบ PHP ให้ครบ 8 กลุ่มระบบ") ──
+# cap = เพดานความสามารถ "ตรวจจากภายนอกแบบไม่ล็อกอิน" (remote unauthenticated) ของเครื่องมือนี้โดยประมาณ
+#       ไม่ใช่ความแม่นของผลลัพธ์รายกรณี — บางกลุ่มต้องเข้าถึงระดับโฮสต์ (nmap -O / agent / credential) จึงจะสูงกว่านี้
+THAICERT_GROUPS = [
+    {"no": 1, "name": "เว็บไซต์ & ระบบภายในองค์กร (CMS)",
+     "ex": "WordPress, Drupal, Joomla, Moodle, Nextcloud", "cap": 85,
+     "note": "ตรวจ CMS + เวอร์ชัน + EOL + ปลอมเวอร์ชัน + ปลั๊กอิน (WP) → CVE ได้ดี; จุดอ่อน: Moodle/ปลั๊กอินเชิงลึก"},
+    {"no": 2, "name": "ระบบหลังบ้านแอปมือถือ & API (Framework)",
+     "ex": "Laravel, Symfony, CodeIgniter, Yii, Slim", "cap": 50,
+     "note": "เห็นการมีอยู่ + debug ที่เปิดทิ้ง (Ignition/Profiler) แต่เฟรมเวิร์กไม่ค่อยรั่วเวอร์ชัน; Yii/Slim ยังไม่รองรับ"},
+    {"no": 3, "name": "Hosting Control Panel",
+     "ex": "cPanel, Plesk, DirectAdmin, Webmin", "cap": 65,
+     "note": "ระบุแผงควบคุมได้ แต่ cPanel/DirectAdmin ไม่เปิดเผยเวอร์ชัน → เทียบ CVE ได้เฉพาะ Plesk/Webmin บางรุ่น"},
+    {"no": 4, "name": "ซอฟต์แวร์ & อุปกรณ์สำเร็จรูป (NAS/กล้อง/Network)",
+     "ex": "Synology, QNAP, Hikvision, pfSense, FortiGate, MikroTik", "cap": 60,
+     "note": "คลังสัญญาณอุปกรณ์กว้าง (NAS/CCTV/firewall/router) + MAC/OUI (เฉพาะ LAN); จุดอ่อน: firmware ส่วนใหญ่ปิด, ไม่มี ICS/SCADA"},
+    {"no": 5, "name": "Container & Docker Image",
+     "ex": "Docker, Kubernetes, Traefik, Istio, Podman", "cap": 30,
+     "note": "เห็นได้แค่ชั้น ingress/reverse-proxy ที่โผล่ออกมา; ภายในคอนเทนเนอร์/อิมเมจต้องตรวจบนโฮสต์"},
+    {"no": 6, "name": "Windows ที่มี PHP ติดตั้ง",
+     "ex": "IIS, XAMPP, WampServer, Laragon", "cap": 55,
+     "note": "ตรวจ IIS/Windows + XAMPP ได้; Wamp/Laragon เห็นผ่าน Apache ทั่วไปเท่านั้น"},
+    {"no": 7, "name": "ระบบทดสอบ / ระบบเก่า / ระบบสำรอง",
+     "ex": "Dev/UAT/Staging, ไฟล์ backup/.git/.env, phpinfo", "cap": 55,
+     "note": "จับไฟล์รั่ว/แบ็กอัป/.git/.env/phpinfo/debug ได้ดี; จุดอ่อน: ไม่จำแนกว่า host เป็น staging/legacy, DR/snapshot เป็นชั้นโครงสร้าง"},
+    {"no": 8, "name": "ระบบที่ผู้ให้บริการภายนอกดูแล (Hosting/Cloud)",
+     "ex": "Shared/Managed Hosting, Cloud VM, WAF/CDN", "cap": 40,
+     "note": "อนุมานประเภทโฮสต์จาก WAF/CDN + control panel ได้ แต่ 'ใครดูแล/ผู้รับจ้าง' เป็นข้อมูลเชิงองค์กร ตรวจทางเทคนิคไม่ได้"},
+]
+
+
+def _thaicert_coverage(data):
+    """จัดสิ่งที่ตรวจพบในสแกนนี้เข้า 8 กลุ่มระบบของ ThaiCERT + เพดานความสามารถของเครื่องมือ
+    คืน list[dict]: {no, name, ex, cap, note, hosts(int), items(list[str])}"""
+    g = {x["no"]: {**x, "_hosts": set(), "_items": set()} for x in THAICERT_GROUPS}
+
+    def hit(no, host, item=""):
+        g[no]["_hosts"].add(host)
+        if item:
+            g[no]["_items"].add(item)
+
+    CMS1 = ("wordpress", "drupal", "joomla", "moodle", "nextcloud")
+    FW2 = ("laravel", "symfony", "codeigniter", "yii", "slim")
+    CP3 = ("cpanel", "plesk", "directadmin", "webmin")
+    CTR5 = ("traefik", "kubernetes", "k8s", "envoy", "istio", "haproxy", "docker", "xampp")
+    for h in data.get("hosts", []):
+        if not h.get("reachable"):
+            continue
+        host = h.get("host", "")
+        cms = (h.get("cms") or "").lower()
+        server = (h.get("server") or "").lower()
+        os_ = (h.get("os") or "").lower()
+        waf = (h.get("waf") or "")
+        device = (h.get("device") or "")
+        dev_l = device.lower()
+        stack = " ".join(h.get("stack", []) or []).lower()
+        comps = h.get("components", []) or []
+        cves = [str(f.get("cve", "")) for f in (h.get("findings", []) or [])]
+
+        # 1) CMS / เว็บไซต์ภายในองค์กร
+        _c1 = next((c for c in CMS1 if c in cms), "")
+        if _c1 or any(c.startswith("APP-") for c in cves):
+            hit(1, host, (h.get("cms", "") or "").strip() if _c1 else "")
+        # 2) Framework / API backend
+        _f2 = next((c for c in FW2 if c in cms or c in stack), "")
+        if _f2 or any(c.startswith("FRAMEWORK-") for c in cves):
+            hit(2, host, _f2.title() if _f2 else "debug ที่เปิดทิ้ง")
+        # 3) Hosting Control Panel
+        _cp = next((c for c in CP3 if c in dev_l), "")
+        if _cp:
+            hit(3, host, device)
+        # 4) อุปกรณ์สำเร็จรูป / NAS / กล้อง / network
+        if device and not _cp:
+            hit(4, host, device)
+        if any(c.startswith("DEVICE-") for c in cves):
+            hit(4, host)
+        if h.get("mac_vendor"):
+            hit(4, host, "MAC→" + h["mac_vendor"])
+        # 5) Container / Docker (ชั้น edge ที่มองเห็น)
+        _ct = next((c for c in CTR5 if c in stack), "")
+        if _ct:
+            hit(5, host, _ct.title())
+        # 6) Windows + PHP
+        if "windows" in os_ or "iis" in server:
+            hit(6, host, "Windows/IIS")
+        if "xampp" in stack:
+            hit(6, host, "XAMPP")
+        # 7) ระบบทดสอบ / เก่า / สำรอง (ไฟล์รั่ว/แบ็กอัป/debug)
+        if any(c.startswith("EXPOSURE-") for c in cves):
+            hit(7, host, "ไฟล์/แบ็กอัปรั่ว")
+        if any(c.startswith("FRAMEWORK-") for c in cves):
+            hit(7, host, "debug เปิดทิ้ง")
+        if any("phpinfo" in (c.get("name", "") or "").lower() for c in comps):
+            hit(7, host, "phpinfo")
+        # 8) ผู้ให้บริการภายนอก / Cloud (อนุมานจาก WAF/CDN + shared hosting)
+        if waf:
+            hit(8, host, waf)
+        if _cp in ("cpanel", "plesk", "directadmin"):
+            hit(8, host, "shared hosting (" + device + ")")
+
+    out = []
+    for x in THAICERT_GROUPS:
+        gg = g[x["no"]]
+        out.append({"no": x["no"], "name": x["name"], "ex": x["ex"], "cap": x["cap"],
+                    "note": x["note"], "hosts": len(gg["_hosts"]),
+                    "items": sorted(gg["_items"])[:6]})
+    return out
+
+
 def _extract_data(json_data):
     scan_date = json_data.get("scan_time", datetime.now().isoformat())
 
@@ -6980,6 +7089,37 @@ def _build_pdf(data, charts, output_path, font):
         story.append(_tt)
         story.append(Spacer(1, 0.4 * cm))
 
+    # ── ความครอบคลุม 8 กลุ่มระบบตามแนวทาง ThaiCERT / NCSA ──
+    _tc = _thaicert_coverage(data)
+    if _tc:
+        _avg = int(round(sum(x["cap"] for x in _tc) / len(_tc)))
+        story.append(P("ความครอบคลุมการตรวจสอบตามแนวทาง ThaiCERT — 8 กลุ่มระบบที่อาจใช้ PHP", h2))
+        story.append(P(
+            f"ตารางนี้จับคู่สิ่งที่ตรวจพบในสแกนครั้งนี้เข้ากับ 8 กลุ่มระบบตามอินโฟกราฟิกของ ThaiCERT/NCSA "
+            f"พร้อม<b>เพดานความสามารถในการตรวจจากภายนอกแบบไม่ล็อกอิน</b> (remote unauthenticated) ของเครื่องมือโดยประมาณ "
+            f"— ค่าเฉลี่ยทั้ง 8 กลุ่ม ≈ <b>{_avg}%</b> "
+            f"(ตัวเลขนี้คือ 'เห็นได้แค่ไหนจากนอกเครือข่าย' ไม่ใช่ความแม่นของผลลัพธ์รายกรณี; "
+            f"หลายกลุ่มจะสูงขึ้นมากหากตรวจระดับโฮสต์ด้วย nmap -O / agent / credential)", note))
+        story.append(Spacer(1, 0.15 * cm))
+        _thd = [P(x, cellwh) for x in ["กลุ่ม", "ความสามารถ", "พบในสแกนนี้", "ขอบเขต / จุดอ่อน"]]
+        _rows = [_thd]
+        for x in _tc:
+            _found = (f"{x['hosts']} โฮสต์" + (f" · {', '.join(x['items'][:4])}" if x["items"] else "")
+                      if x["hosts"] else "— ไม่พบ")
+            _rows.append([P(f"{x['no']}. {x['name']}<br/><font size=7 color='#6b7280'>ตัวอย่าง: {x['ex']}</font>", cell),
+                          P(f"<b>{x['cap']}%</b>", cell),
+                          P(_found, cell),
+                          P(x["note"], cell)])
+        _ct = Table(_rows, colWidths=[5.2 * cm, 1.7 * cm, 4.1 * cm, 5.0 * cm])
+        _ct.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), RMUT_BLUE),
+            ("LINEBELOW", (0, 0), (-1, -1), 0.4, colors.HexColor("#d9dce6")),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ("LEFTPADDING", (0, 0), (-1, -1), 6)]))
+        story.append(_ct)
+        story.append(Spacer(1, 0.4 * cm))
+
     story.append(P("ขอบเขตและข้อจำกัดของการสแกน", h2))
     for lim in ["การตรวจสอบนี้ทำจากภายนอกเครือข่าย (เสมือนแฮกเกอร์มือใหม่) — ไม่สามารถยืนยันเวอร์ชันซอฟต์แวร์ที่รันจริงบนเซิร์ฟเวอร์ได้ทุกกรณี",
                 "การตรวจค่าคอนฟิกเซิร์ฟเวอร์ละเอียด (เช่น การตั้งค่า SSI, AIO, alias) ต้องเข้าไปตรวจบนเครื่องจริงโดยแอดมิน",
@@ -7596,6 +7736,7 @@ def _build_html_dashboard(data, path):
                            "by_severity": s["by_severity"], "by_category": s["by_category"],
                            "verdict": s["verdict"], "target": data["target"],
                            "scan_date": data["scan_date"], "multi": multi,
+                           "thaicert": _thaicert_coverage(data),
                            "hosts": hosts_js, "findings": findings_js},
                           ensure_ascii=False)
 
@@ -7771,6 +7912,19 @@ td.mxc{text-align:center;font-weight:800;color:#fff;padding:5px 4px;border:1px s
     <b style="color:var(--ink)">รายหัวข้อ CVE</b> — 1 เครื่องตรวจหลายหัวข้อ ตัวเลขจึงมากกว่าจำนวนเครื่อง<br>
     <span style="color:var(--muted)">ตัวเลขทั้งสองหน่วยตรงกับไฟล์ PDF / Excel / CSV</span>
   </div></div>
+</div>
+
+<!-- ── ความครอบคลุม 8 กลุ่มระบบ ThaiCERT ── -->
+<div class="panel" style="margin-bottom:16px">
+  <h3 style="margin:0 0 4px;color:var(--ink);font-size:14px;font-weight:700">🛡 ความครอบคลุมตามแนวทาง ThaiCERT · 8 กลุ่มระบบที่อาจใช้ PHP</h3>
+  <p class="sub" id="tc8-cap" style="margin:0 0 10px"></p>
+  <div class="tbl-wrap" style="max-height:none">
+    <table id="tc8-tbl"><thead id="tc8-thd"></thead><tbody id="tc8-tb"></tbody></table>
+  </div>
+  <p class="sub" style="margin:8px 2px 0;color:var(--muted);font-size:11.5px">
+    💡 <b>ความสามารถ (%)</b> = เพดานการมองเห็นจากภายนอกแบบไม่ล็อกอิน (remote unauthenticated) ของเครื่องมือโดยประมาณ —
+    ไม่ใช่ความแม่นของผลลัพธ์รายกรณี หลายกลุ่มจะสูงขึ้นมากหากตรวจระดับโฮสต์ (nmap -O / agent / credential)
+  </p>
 </div>
 
 <!-- ── รายงานโฮสต์ ── -->
@@ -9500,8 +9654,44 @@ function init(){
   document.getElementById('vh').textContent = v.headline;
   document.getElementById('vd').textContent = v.detail;
 
+  renderThaiCERT8();
   initCharts();
   updateAll();
+}
+
+// ── ตารางความครอบคลุม 8 กลุ่มระบบ ThaiCERT (คิดจาก DATA ทั้งหมด ไม่ขึ้นกับตัวกรอง) ──
+function renderThaiCERT8(){
+  const tc = (D.thaicert || []);
+  if(!tc.length) return;
+  const avg = Math.round(tc.reduce((a,x)=>a+x.cap,0)/tc.length);
+  const cap = document.getElementById('tc8-cap');
+  if(cap) cap.innerHTML = 'จับคู่สิ่งที่ตรวจพบเข้ากับ 8 กลุ่มระบบของ ThaiCERT/NCSA · ' +
+    'ความสามารถเฉลี่ยในการตรวจจากภายนอก ≈ <b style="color:var(--ink)">'+avg+'%</b>';
+  const thd = document.getElementById('tc8-thd');
+  if(thd) thd.innerHTML = '<tr>'+
+    '<th style="text-align:left">กลุ่มระบบ</th>'+
+    '<th style="width:170px">ความสามารถตรวจจากภายนอก</th>'+
+    '<th style="text-align:left;width:230px">พบในสแกนนี้</th>'+
+    '<th style="text-align:left">ขอบเขต / จุดอ่อน</th></tr>';
+  const barColor = p => p>=70 ? 'var(--safe)' : (p>=45 ? 'var(--warn)' : 'var(--vuln)');
+  const esc = s => (''+s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+  const rows = tc.map(x=>{
+    const found = x.hosts
+      ? '<b style="color:var(--ink)">'+x.hosts+' โฮสต์</b>' +
+        (x.items && x.items.length ? '<br><span style="color:var(--muted);font-size:11px">'+esc(x.items.slice(0,4).join(', '))+'</span>' : '')
+      : '<span style="color:var(--muted)">— ไม่พบ</span>';
+    return '<tr>'+
+      '<td><b>'+x.no+'. '+esc(x.name)+'</b><br><span style="color:var(--muted);font-size:11px">ตัวอย่าง: '+esc(x.ex)+'</span></td>'+
+      '<td><div style="display:flex;align-items:center;gap:8px">'+
+        '<div style="flex:1;height:8px;background:#eef1f6;border-radius:5px;overflow:hidden">'+
+          '<div style="width:'+x.cap+'%;height:100%;background:'+barColor(x.cap)+'"></div></div>'+
+        '<span style="font-weight:700;color:var(--ink);font-size:12px;min-width:34px;text-align:right">'+x.cap+'%</span>'+
+      '</div></td>'+
+      '<td>'+found+'</td>'+
+      '<td style="color:#555;font-size:11.5px;line-height:1.55">'+esc(x.note)+'</td></tr>';
+  }).join('');
+  const tb = document.getElementById('tc8-tb');
+  if(tb) tb.innerHTML = rows;
 }
 
 init();
