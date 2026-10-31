@@ -1487,6 +1487,67 @@ def _probe_framework(session, base, prefix, fp, timeout):
     return out
 
 
+def _audit_security_headers(fp, base):
+    """ตรวจ HTTP security headers ที่ขาด/อ่อน จาก fp['headers'] (ไม่ยิง request เพิ่ม)
+    คืน {HEADER-*: finding} — รวมเป็นรายการเดียวเพื่อไม่ให้ท่วมรายงาน + แยกเคส cookie"""
+    out = {}
+    if not fp.get("reachable"):
+        return out
+    H = fp.get("headers", {}) or {}
+    is_https = base.startswith("https://")
+
+    def has(name):
+        return bool(H.get(name.lower()))
+
+    missing = []  # (ชื่อ header, ระดับ 'medium'|'low', คำอธิบาย)
+    if is_https and not has("strict-transport-security"):
+        missing.append(("Strict-Transport-Security (HSTS)", "medium", "บังคับ HTTPS กัน downgrade/MITM"))
+    if not has("content-security-policy"):
+        missing.append(("Content-Security-Policy (CSP)", "medium", "ลดความเสี่ยง XSS/injection"))
+    csp = " ".join(H.get("content-security-policy", [])).lower()
+    if not has("x-frame-options") and "frame-ancestors" not in csp:
+        missing.append(("X-Frame-Options", "medium", "กัน clickjacking (หรือใช้ CSP frame-ancestors)"))
+    if "nosniff" not in " ".join(H.get("x-content-type-options", [])).lower():
+        missing.append(("X-Content-Type-Options: nosniff", "low", "กัน MIME sniffing"))
+    if not has("referrer-policy"):
+        missing.append(("Referrer-Policy", "low", "คุมการรั่วของ Referer"))
+    if not has("permissions-policy"):
+        missing.append(("Permissions-Policy", "low", "จำกัดฟีเจอร์เบราว์เซอร์ที่ไม่ใช้"))
+
+    if missing:
+        has_medium = any(w == "medium" for _, w, _ in missing)
+        names = "; ".join(f"{n} ({note})" for n, _, note in missing)
+        out["HEADER-SecurityHeaders"] = {
+            "cve": "HEADER-SecurityHeaders",
+            "name": f"Security headers ขาด/อ่อน ({len(missing)} รายการ)",
+            "severity": "Medium" if has_medium else "Low",
+            "trigger": "ตรวจ HTTP response headers",
+            "host_check": "เพิ่ม security headers ที่ web server (nginx: add_header ...; Apache: Header set ...)",
+            "status": "medium-risk" if has_medium else "unknown",
+            "reason": f"ขาด/ไม่ได้ตั้งค่า: {names}",
+        }
+
+    sc = " ".join(H.get("set-cookie", []))
+    if sc:
+        sc_low = sc.lower()
+        issues = []
+        if is_https and "secure" not in sc_low:
+            issues.append("ไม่มี Secure")
+        if "httponly" not in sc_low:
+            issues.append("ไม่มี HttpOnly")
+        if "samesite" not in sc_low:
+            issues.append("ไม่มี SameSite")
+        if issues:
+            out["HEADER-Cookie"] = {
+                "cve": "HEADER-Cookie", "name": "Cookie ขาด flag ความปลอดภัย",
+                "severity": "Medium", "trigger": "ตรวจ Set-Cookie",
+                "host_check": "ตั้ง Secure; HttpOnly; SameSite=Lax/Strict บนคุกกี้ session",
+                "status": "medium-risk",
+                "reason": f"คุกกี้: {', '.join(issues)} — เสี่ยงถูกขโมยผ่าน XSS/ส่งข้ามไซต์",
+            }
+    return out
+
+
 def _stack_profile(fp, cms_info):
     """สรุปสแตกเป็นชั้น ๆ สำหรับแสดงผล: OS → device → server → container → runtime → app"""
     layers = []
@@ -2910,6 +2971,7 @@ def scan_single_target(target_str, opts, idx=1, total=1):
     component_cves = _analyze_components(fp)
     exposure_cves = _probe_exposures(session, base, path_prefix, opts["timeout"])
     framework_cves = _probe_framework(session, base, path_prefix, fp, opts["timeout"])
+    header_cves = _audit_security_headers(fp, base)
     fp["stack_layers"] = _stack_profile(fp, cms_info)
     _v and fp["stack_layers"] and print(f"    Stack: {' → '.join(fp['stack_layers'])}")
     online_cves = _online_cve_scan(fp, cms_info, opts)
@@ -2971,12 +3033,13 @@ def scan_single_target(target_str, opts, idx=1, total=1):
              list(nodejs_cves.values()) + list(gitlab_cves.values()) +
              list(app_cves.values()) + list(device_cves.values()) +
              list(component_cves.values()) + list(exposure_cves.values()) +
-             list(framework_cves.values()) + list(online_cves.values()))
+             list(framework_cves.values()) + list(header_cves.values()) +
+             list(online_cves.values()))
 
     if selected:
         all_r = [r for r in all_r if r.get("cve") in selected
                  or r.get("cve", "").startswith(("UNSUPPORTED-", "APP-", "DEVICE-", "COMP-",
-                                                  "EXPOSURE-", "FRAMEWORK-", "ONLINE-"))]
+                                                  "EXPOSURE-", "FRAMEWORK-", "HEADER-", "ONLINE-"))]
     vuln_cnt = sum(1 for r in all_r if r["status"] in ("vulnerable", "high-risk", "likely-vulnerable", "unpatched"))
     warn_cnt = sum(1 for r in all_r if r["status"] in ("medium-risk", "vulnerable-version", "vulnerable-conditions"))
     crit = vuln_cnt + warn_cnt
@@ -3011,7 +3074,8 @@ def scan_single_target(target_str, opts, idx=1, total=1):
         "gitlab_cves": gitlab_cves,
         "app_cves": app_cves, "device_cves": device_cves,
         "component_cves": component_cves, "exposure_cves": exposure_cves,
-        "framework_cves": framework_cves, "online_cves": online_cves,
+        "framework_cves": framework_cves, "header_cves": header_cves,
+        "online_cves": online_cves,
         "summary": {"total_cves": len(all_r), "detected": crit,
                     "vulnerable": vuln_cnt, "warning": warn_cnt,
                     "critical": crit, "safe": safe, "unknown": unknown},
@@ -4865,6 +4929,8 @@ def _host_findings(h):
         out.append({**d, "category": "Exposure", "target": tgt})
     for _cve, d in (h.get("framework_cves") or {}).items():
         out.append({**d, "category": "Framework", "target": tgt})
+    for _cve, d in (h.get("header_cves") or {}).items():
+        out.append({**d, "category": "Headers", "target": tgt})
     for _cve, d in (h.get("online_cves") or {}).items():
         out.append({**d, "category": "Online CVE", "target": tgt})
     return out
