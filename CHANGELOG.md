@@ -6,9 +6,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [6.4.0] — 2026-10-31
+
+Backward compatible with 6.3.0: scan JSON from older runs still loads, and the
+old release stays usable via tag `v6.3.0`.
+
 ### Added
-- Packaging (`pyproject.toml`) with a `rmut-cert` console entry point.
-- Repository scaffolding: README, LICENSE (MIT), CONTRIBUTING, SECURITY, Code of Conduct, CI, and issue/PR templates.
+- Deep stack fingerprinting: OS version, web-server modules (OpenSSL,
+  mod_fcgid, Passenger, …), device/appliance detection (Synology DSM,
+  QNAP QTS, TrueNAS, WD MyCloud, pfSense, OPNsense, FortiGate, MikroTik,
+  UniFi, CUPS, cPanel/Plesk/DirectAdmin/Webmin), externally-visible
+  container/reverse-proxy layer (Traefik, k8s ingress, Envoy/Istio,
+  HAProxy), and a layered stack-profile summary.
+- Application version detection with EOL and version-spoof flags for
+  WordPress, Drupal, Joomla, Nextcloud (`status.php`), plus lightweight
+  WordPress plugin + version harvesting.
+- Component detection: databases via error/signature leaks
+  (MySQL/MariaDB, PostgreSQL, MSSQL, SQLite, Oracle, MongoDB), admin
+  tools (phpMyAdmin, Adminer, phpPgAdmin, phpinfo, Jenkins, Grafana,
+  Kibana), and client JS libraries (jQuery, Bootstrap, Vue, React,
+  AngularJS, Lodash).
+- Exposed-file checks with content validators: `.env` and backups,
+  `.git/HEAD`+`config`, `composer.lock`/`composer.json`, `package.json`,
+  `wp-config` backups, `phpinfo.php`/`info.php`, Apache
+  `server-status`/`server-info`, `web.config`, `.aws/credentials`,
+  `backup.sql`, `.DS_Store`.
+- Framework debug exposure: Laravel Ignition (CVE-2021-3129 risk),
+  Symfony Web Profiler, and the `X-Debug-Token` header.
+- Security headers audit (HSTS, CSP, X-Frame-Options,
+  X-Content-Type-Options, Referrer-Policy, Permissions-Policy) and
+  insecure session-cookie flags (Secure/HttpOnly/SameSite).
+- WAF / security-proxy detection (Cloudflare, Sucuri, Akamai, Imperva,
+  AWS WAF, F5 BIG-IP, ModSecurity, Wordfence, FortiWeb, Barracuda, …).
+- TLS inspection via real handshake: expired / expiring (<30d) /
+  self-signed / hostname-mismatch / verify-failed certificates, plus a
+  best-effort weak-protocol probe (TLS 1.0/1.1).
+- Opt-in online CVE lookup (CIRCL cve-search, no API key) correlating
+  every detected version — PHP, web server, OpenSSL, device firmware,
+  app/CMS, and `composer.lock` packages — with published CVEs. The
+  affected-version matcher understands both structured
+  (`version`/`lessThan`/`lessThanOrEqual`) and free-text ranges
+  (`">= 1.12.0, < 3.5.0"`, `"prior to version X"`).
+- Packaging (`pyproject.toml`) with a `security-audit` console entry
+  point, and repository scaffolding (README, LICENSE, CONTRIBUTING,
+  SECURITY, Code of Conduct, CI, issue/PR templates).
+
+### Changed
+- Reports (PDF / Excel / HTML / CSV) now surface every new detection.
+  The PDF "Stack Fingerprint" section lists the stack profile, OS
+  version, server modules, WAF/CDN, device, container layer, app +
+  version (+ plugin count), other components and the composer package
+  count; the host CMS column shows the app version; TLS/cert details are
+  written back into the fingerprint instead of always "not checked".
+  Finding tables and the category/severity charts pick up the new
+  categories automatically.
+- macOS file/folder picker reworked to use the native `osascript` dialog
+  (brought to the foreground) and to stop stealing window focus.
+
+### Security
+- `.gitignore` hardened to ignore report files by name
+  (`dashboard_*.html`, `report_*.xlsx`, `report_*_findings.csv`,
+  `report_*_ip.csv`), not only those inside `reports/`.
 
 ## [6.3.0] — 2026-10-30
 
@@ -21,5 +79,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Per-host CVSS v3.1 risk index.
 - Interactive menu and scriptable CLI.
 
-[Unreleased]: https://github.com/CybersRMUTL/security-audit-toolkit/compare/v6.3.0...HEAD
+[Unreleased]: https://github.com/CybersRMUTL/security-audit-toolkit/compare/v6.4.0...HEAD
+[6.4.0]: https://github.com/CybersRMUTL/security-audit-toolkit/compare/v6.3.0...v6.4.0
 [6.3.0]: https://github.com/CybersRMUTL/security-audit-toolkit/releases/tag/v6.3.0

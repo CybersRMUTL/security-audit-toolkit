@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-security_audit_toolkit.py — Security Audit Toolkit (RMUT CERT) v6.3
+security_audit_toolkit.py — Security Audit Toolkit (RMUT CERT) v6.4
 Scanner (13 CVEs) + RCE Verify (chain-of-custody) + Report Generator (PDF/CSV/Excel/HTML)
 + Cross-Menu Navigation + CVE Display + File Browser (GUI & Interactive CLI)
 
@@ -91,7 +91,7 @@ except Exception:
 # SECTION 1 — Constants
 # ═══════════════════════════════════════════════════════════════════════
 
-VERSION = "6.3"
+VERSION = "6.4"
 _OWN_TARGET = False     # ตั้งเป็น True เมื่อใช้ --i-own-this-target
 _SCAN_DEPTH = 2         # ความลึกการ crawl (--depth)
 _SCAN_MAX_PAGES = 50    # จำนวนหน้าสูงสุดต่อโฮสต์ (--max-pages)
