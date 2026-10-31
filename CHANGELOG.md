@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Banner-based OS detection (pure-Python, no nmap, no root) so OS fingerprinting
+  survives compilation to a single .app/.exe without bundling a large external
+  binary. Grabs SSH/FTP/SMTP banners and checks the Windows service-port profile
+  (RDP/SMB/NetBIOS/MSRPC) concurrently, mapping SSH banners to distros
+  (Ubuntu/Debian/CentOS/RHEL/Rocky, FreeBSD, MikroTik RouterOS, Dropbear,
+  Windows-OpenSSH, …). It slots in right after the HTTP Server header and ahead
+  of nmap/TTL; nmap, when present, stays an optional enhancement for hosts that
+  hide every banner.
 - LAN scanning overhaul for accuracy and coverage:
   - Non-standard web ports are now found and scanned. Host discovery runs in
     two phases — a fast liveness check, then a full web/admin/device port

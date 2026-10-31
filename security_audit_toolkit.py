@@ -1685,6 +1685,108 @@ def _lan_hint(kind, msg):
     print(msg)
 
 
+def _grab_banner(ip, port, timeout, probe=None):
+    """เปิด TCP อ่าน banner บรรทัดแรก (pure-Python ไม่พึ่ง nmap/root) — '' ถ้าไม่ได้"""
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    try:
+        if s.connect_ex((ip, port)) != 0:
+            return ""
+        if probe:
+            try:
+                s.sendall(probe)
+            except Exception:
+                pass
+        return s.recv(256).decode("latin-1", "replace").strip()
+    except Exception:
+        return ""
+    finally:
+        try:
+            s.close()
+        except Exception:
+            pass
+
+
+def _tcp_open(ip, port, timeout):
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    try:
+        return s.connect_ex((ip, port)) == 0
+    except Exception:
+        return False
+    finally:
+        s.close()
+
+
+# SSH banner → distro (เรียงจากเจาะจงไปทั่วไป)
+_SSH_OS = [
+    (r"for_windows|windows", "Windows (OpenSSH)"), (r"ubuntu", "Ubuntu Linux"),
+    (r"raspbian", "Raspberry Pi OS (Debian)"), (r"debian", "Debian Linux"),
+    (r"\.el9|rhel9|centos.*9", "RHEL/CentOS/Rocky 9"), (r"\.el8|centos.*8", "RHEL/CentOS/Rocky 8"),
+    (r"\.el7|centos.*7", "RHEL/CentOS 7"), (r"centos|red\s*hat|rhel", "RHEL/CentOS"),
+    (r"freebsd", "FreeBSD"), (r"openbsd", "OpenBSD"), (r"netbsd", "NetBSD"),
+    (r"sun_ssh|solaris", "Solaris"), (r"mikrotik|rosssh", "MikroTik RouterOS (Linux)"),
+    (r"cisco", "Cisco IOS"), (r"huawei", "Huawei"), (r"dropbear", "Embedded Linux (Dropbear)"),
+    (r"gentoo", "Gentoo Linux"), (r"suse", "SUSE Linux"), (r"arch", "Arch Linux"),
+]
+
+
+def _probe_os_banners(ip, timeout):
+    """เดา OS จาก service banner (SSH/FTP/SMTP) + port-profile — pure-Python, ไม่ต้อง nmap/root
+    ยิงพอร์ตที่เกี่ยวข้องพร้อมกัน (bounded ~1 timeout) แล้วตัดสินใจตามความเชื่อมั่น
+    คืน (os, source, confidence) หรือ (None, None, None)"""
+    t = min(max(timeout, 1.0), 2.5)
+    res = {}
+    jobs = {
+        "ssh": lambda: _grab_banner(ip, 22, t),
+        "ftp": lambda: _grab_banner(ip, 21, t),
+        "smtp": lambda: _grab_banner(ip, 25, t),
+        "rdp": lambda: _tcp_open(ip, 3389, t),
+        "smb": lambda: _tcp_open(ip, 445, t),
+        "nbt": lambda: _tcp_open(ip, 139, t),
+        "msrpc": lambda: _tcp_open(ip, 135, t),
+    }
+    with ThreadPoolExecutor(max_workers=len(jobs)) as ex:
+        futs = {ex.submit(fn): k for k, fn in jobs.items()}
+        for f in as_completed(futs):
+            try:
+                res[futs[f]] = f.result()
+            except Exception:
+                res[futs[f]] = None
+    # 1) SSH banner — แม่นสุด
+    sb = res.get("ssh") or ""
+    if sb.startswith("SSH-"):
+        low = sb.lower()
+        for pat, name in _SSH_OS:
+            if re.search(pat, low):
+                return name, f"SSH banner: {sb[:50]}", "สูง"
+        if "openssh" in low:
+            return "Linux/Unix (OpenSSH)", f"SSH banner: {sb[:50]}", "ปานกลาง"
+        return "Linux/Unix (SSH)", f"SSH banner: {sb[:50]}", "ปานกลาง"
+    # 2) FTP / SMTP banner
+    fb = (res.get("ftp") or "").lower()
+    if fb:
+        if "microsoft ftp" in fb:
+            return "Windows", f"FTP banner: {res['ftp'][:48]}", "สูง"
+        if any(x in fb for x in ("vsftpd", "proftpd", "pure-ftpd", "ubuntu", "debian")):
+            return "Linux/Unix", f"FTP banner: {res['ftp'][:48]}", "ปานกลาง"
+    mb = (res.get("smtp") or "").lower()
+    if mb:
+        if "microsoft" in mb:
+            return "Windows", f"SMTP banner: {res['smtp'][:48]}", "สูง"
+        if any(x in mb for x in ("postfix", "exim", "sendmail", "ubuntu", "debian")):
+            return "Linux/Unix", f"SMTP banner: {res['smtp'][:48]}", "ปานกลาง"
+    # 3) Port-profile — พอร์ตบริการ Windows
+    win = [p for p, k in ((3389, "rdp"), (445, "smb"), (139, "nbt"), (135, "msrpc")) if res.get(k)]
+    if len(win) >= 2 or 3389 in win:
+        return "Windows (น่าจะ)", f"port-profile: เปิด {','.join(map(str, win))}", "ปานกลาง"
+    if res.get("ssh") == "" and win:
+        return "Windows (น่าจะ)", f"port-profile: เปิด {','.join(map(str, win))}", "ต่ำ-ปานกลาง"
+    return None, None, None
+
+
 def _probe_os(host, fp, timeout, lan=False):
     """เสริมการระบุ OS แบบหลายแหล่ง + ติดป้ายที่มา/ความเชื่อมั่น (ไม่รับประกันถูก 100%):
     1) Server header (เชื่อถือสูง) 2) nmap -O ถ้ามี (ปานกลาง-สูง +%) 3) TTL heuristic
@@ -1697,11 +1799,24 @@ def _probe_os(host, fp, timeout, lan=False):
         fp["os_source"] = fp.get("os_source") or "Server header"
         fp["os_confidence"] = fp.get("os_confidence") or "สูง"
         return
+    # 1.5) Banner-based (pure-Python, ไม่ต้อง nmap/root, คอมไพล์เป็น .app/.exe ได้) — SSH/FTP/SMTP + port-profile
+    import socket as _sock
+    try:
+        _ip = _sock.gethostbyname(host)
+    except Exception:
+        _ip = host
+    b_os, b_src, b_conf = _probe_os_banners(_ip, timeout)
+    if b_os:
+        fp["os"] = b_os
+        fp["os_source"] = b_src
+        fp["os_confidence"] = b_conf
+        return
     # 2) nmap -O (gold standard — ต้องติดตั้ง nmap + สิทธิ์ root; ให้ผลเป็น % ความมั่นใจ)
     #    โหมด LAN: ตัด -Pn ออกให้ nmap ใช้ ARP ping ค้นโฮสต์ (บนวงเดียวกันแม่นและได้ MAC fingerprint)
     if lan and not shutil.which("nmap"):
-        _lan_hint("nmap", "  ⚠ OS detection: ไม่พบ nmap — ติดตั้งด้วย `brew install nmap` (แล้วรันด้วย sudo) "
-                          "เพื่อระบุ OS แม่นยำ; ตอนนี้ใช้ Server header + TTL + ยี่ห้อ MAC เท่าที่ได้")
+        _lan_hint("nmap", "  ℹ OS detection: ไม่มี nmap — ใช้วิธี pure-Python แทน (SSH/FTP/SMTP banner + "
+                          "port-profile + Server header + TTL + ยี่ห้อ MAC). ติดตั้ง `nmap` (รัน sudo) "
+                          "จะได้ TCP/IP stack fingerprint เสริมเมื่อ host ปิด banner หมด")
     if shutil.which("nmap"):
         cmd = (["nmap", "-O", "--osscan-guess", "--host-timeout", "25s", host] if lan
                else ["nmap", "-O", "--osscan-guess", "-Pn", "--host-timeout", "20s", host])
