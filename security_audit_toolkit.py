@@ -95,6 +95,7 @@ VERSION = "6.4"
 _OWN_TARGET = False     # ตั้งเป็น True เมื่อใช้ --i-own-this-target
 _SCAN_DEPTH = 2         # ความลึกการ crawl (--depth)
 _SCAN_MAX_PAGES = 50    # จำนวนหน้าสูงสุดต่อโฮสต์ (--max-pages)
+_SCAN_MODE = "auto"     # โหมดสแกนที่เลือกตั้งแต่ต้น (interactive): auto | external | lan
 DEFAULT_UA = "RMUT-CERT all-in-one/3.0 (authorized testing only)"
 
 PHP_PATCHED = {(8, 2): 35, (8, 3): 36, (8, 4): 27, (8, 5): 12}
@@ -10618,6 +10619,13 @@ def ask_scan_mode():
         default="auto")
 
 
+def _scan_mode_label(mode=None):
+    """ป้ายโหมดสแกนสำหรับแสดงในเมนู/หัวข้อ"""
+    m = mode or _SCAN_MODE
+    return {"lan": "🏠 LAN (เครือข่ายภายใน)", "external": "🌐 ภายนอก (External)",
+            "auto": "⚙️ อัตโนมัติ (auto)"}.get(m, "⚙️ อัตโนมัติ (auto)")
+
+
 def ask_choice(prompt, choices, default=None):
     print(f"  {prompt}")
     print()
@@ -11028,8 +11036,10 @@ def menu_scan():
     print(f"  {c('📦 Output ที่จะได้จากเมนูนี้:', C.GRN)} ไฟล์ JSON บันทึกผลสแกน เช่น {c('scan_<mode>_<target>_<timestamp>.json', C.B)}")
     print(f"  {c('   (ประกอบด้วยข้อมูล Server/PHP Fingerprint, ช่องโหว่ 14 CVEs, จุดเสี่ยง LFI และ Session)', C.D)}\n")
 
-    # ── ภาพใหญ่ก่อน: เลือกโหมดการสแกน (จากตำแหน่งใด) แล้วค่อยโฟกัสที่เป้าหมาย ──
-    _scan_mode = ask_scan_mode()
+    # ── โหมดการสแกนเลือกไว้ตั้งแต่เปิดโปรแกรมแล้ว (เมนูหลัก) — แสดงให้เห็นว่ากำลังใช้โหมดใด ──
+    _scan_mode = _SCAN_MODE
+    print(f"  {c('โหมดสแกน:', C.B)} {c(_scan_mode_label(_scan_mode), C.CYN)} "
+          f"{c('(เปลี่ยนได้ที่เมนูหลัก)', C.D)}\n")
 
     mode = ask_choice("เลือกรูปแบบเป้าหมายที่ต้องการสแกน:", [
         ("single", "Single Host (เป้าหมายเดี่ยว)",
@@ -11420,8 +11430,10 @@ def menu_pipeline():
     print(f"     5. {c('reports/charts/*.png', C.B)}                      — กราฟสถิติประกอบรายงาน 4 รูป\n")
 
     section("STEP 1: Scan")
-    # ── ภาพใหญ่ก่อน: เลือกโหมดการสแกน แล้วค่อยโฟกัสที่เป้าหมาย ──
-    _scan_mode = ask_scan_mode()
+    # ── โหมดการสแกนเลือกไว้ตั้งแต่เปิดโปรแกรมแล้ว (เมนูหลัก) ──
+    _scan_mode = _SCAN_MODE
+    print(f"  {c('โหมดสแกน:', C.B)} {c(_scan_mode_label(_scan_mode), C.CYN)} "
+          f"{c('(เปลี่ยนได้ที่เมนูหลัก)', C.D)}\n")
     mode = ask_choice("เลือกรูปแบบเป้าหมายสำหรับทำ Full Pipeline:", [
         ("single", "Single Host (เป้าหมายเดี่ยว)",
          "ระบุ IP, Domain หรือ URL เดี่ยวเพื่อสแกน → พิสูจน์ RCE → ออกรายงาน",
@@ -11588,13 +11600,19 @@ def menu_pipeline():
 
 def main_menu():
     """Main loop with cross-menu navigation"""
+    global _SCAN_MODE
     pending_action = None
     last_result = None
+
+    # ── ภาพใหญ่ก่อนสุด: เลือกโหมดการสแกน (LAN/ภายนอก) ก่อนเข้าเมนูหลัก ──
+    banner()
+    _SCAN_MODE = ask_scan_mode()
 
     while True:
         if pending_action is None:
             banner()
             print(f"  {c('คำแนะนำการใช้งาน:', C.B)} เลือกหมายเลขเมนูที่ต้องการ ด้านล่างแสดงรายละเอียดและ Output ของแต่ละเมนู")
+            print(f"  {c('โหมดสแกนปัจจุบัน:', C.B)} {c(_scan_mode_label(), C.CYN)}  {c('(เปลี่ยนได้ที่เมนูท้ายสุด)', C.D)}")
             print(f"  {c('⭐ แนะนำ:', C.YEL)} ใช้ครั้งแรกหรืออยากได้ครบจบในขั้นตอนเดียว ให้เลือก {c('เมนู 5) Full Pipeline', C.B)} — สแกน → ยืนยัน → ออกรายงาน อัตโนมัติ")
             print(c("─" * 74, C.D))
             action = ask_choice("เมนูหลัก (Main Menu):", [
@@ -11618,6 +11636,10 @@ def main_menu():
                  f"Full Pipeline — ครบวงจรอัตโนมัติ  {c('⭐ แนะนำ', C.YEL)}",
                  "Scan → RCE Verify (ถ้าเข้าเงื่อนไข) → Report ในคำสั่งเดียว",
                  "JSON + evidence/ + reports/"),
+                ("mode",
+                 f"เปลี่ยนโหมดสแกน (ปัจจุบัน: {_scan_mode_label()})",
+                 "สลับ LAN / ภายนอก / อัตโนมัติ — มีผลกับเมนู Scan และ Full Pipeline",
+                 ""),
                 ("quit", "ออกจากโปรแกรม (Exit)", "", ""),
             ], default="cve")
         else:
@@ -11630,6 +11652,12 @@ def main_menu():
 
         if action == "cve":
             display_cve_list(verbose=True)
+            input(f"  {c('กด Enter เพื่อกลับ...', C.D)}")
+            continue
+
+        if action == "mode":
+            _SCAN_MODE = ask_scan_mode()
+            print(f"  {c('✓ ตั้งโหมดสแกนเป็น:', C.GRN)} {c(_scan_mode_label(), C.CYN)}")
             input(f"  {c('กด Enter เพื่อกลับ...', C.D)}")
             continue
 
