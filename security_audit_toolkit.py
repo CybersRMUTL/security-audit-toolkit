@@ -8475,16 +8475,22 @@ def _osascript_choose(kind, title, start_dir, exts=None):
         import subprocess
         safe_title = title.replace("\\", "\\\\").replace('"', '\\"')
         loc = os.path.abspath(start_dir)
-        # เตรียมสคริปต์หลายแบบ: ลองแบบมีตัวกรองนามสกุลก่อน ถ้า macOS บางรุ่น error
-        # ที่ `of type {...}` ให้ลองแบบไม่กรองต่อ ก่อนจะยอมแพ้ (ดีกว่าหล่นไป CLI)
+        verb = "choose folder" if kind == "folder" else "choose file"
+        # ตัวกรองนามสกุล (เฉพาะ choose file) — ใส่ไว้ลองก่อน ถ้า macOS บางรุ่น error ค่อยตัดทิ้ง
+        type_clause = ""
+        if kind != "folder" and exts:
+            quoted = ", ".join('"' + e.lstrip(".") + '"' for e in exts)
+            type_clause = f" of type {{{quoted}}}"
+        # default location ใส่ได้ก็ต่อเมื่อโฟลเดอร์มีอยู่จริง (ถ้า path ไม่มีจริง osascript จะ error
+        # ไม่ยอมเปิดหน้าต่างเลย) — จึงเตรียมทั้งแบบมี location และแบบไม่มี (เปิดได้เสมอ) ไว้เป็น fallback
+        loc_opts = ([f' default location (POSIX file "{loc}")'] if os.path.isdir(loc) else []) + [""]
+        filt_opts = ([type_clause] if type_clause else []) + [""]
+        # ลำดับความพยายาม: (กรอง+location) → (กรอง+ไม่มี loc) → (ไม่กรอง+location) → (ไม่กรอง+ไม่มี loc)
+        # ตัวสุดท้าย "ไม่กรอง + ไม่มี location" เปิดหน้าต่างได้เสมอทุกเครื่อง/ทุกโฟลเดอร์
         choosers = []
-        if kind == "folder":
-            choosers.append(f'choose folder with prompt "{safe_title}" default location (POSIX file "{loc}")')
-        else:
-            if exts:
-                quoted = ", ".join('"' + e.lstrip(".") + '"' for e in exts)
-                choosers.append(f'choose file with prompt "{safe_title}" default location (POSIX file "{loc}") of type {{{quoted}}}')
-            choosers.append(f'choose file with prompt "{safe_title}" default location (POSIX file "{loc}")')
+        for fc in filt_opts:
+            for lc in loc_opts:
+                choosers.append(f'{verb} with prompt "{safe_title}"{lc}{fc}')
         for chooser in choosers:
             # นำหน้าด้วย `activate` เพื่อดึง dialog ขึ้นมาหน้าสุดทันที (ไม่ให้ไปซ่อนหลัง Terminal)
             # `activate` แบบ top-level ใช้สิทธิ์ของ osascript เอง ไม่ต้องขอ Automation permission
