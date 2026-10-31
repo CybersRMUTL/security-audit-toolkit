@@ -5188,9 +5188,11 @@ def _extract_data(json_data):
                 "server": (f"{fp.get('server_family', '?')} {fp.get('server_version', '')}".strip() or "?"),
                 "php": ", ".join(fp.get("php_versions", [])) or "-",
                 "cms": _cms_disp,
+                "os": (fp.get("os_version") or (fp.get("os") if fp.get("os") not in (None, "Unknown") else "")),
                 "stack": fp.get("stack_layers", []) or [],
                 "waf": fp.get("waf") or "",
-                "device": fp.get("device") or "",
+                "device": (f"{fp['device']} {fp.get('device_version', '')}".strip() if fp.get("device") else ""),
+                "components": fp.get("components", []) or [],
                 "lfi": len(r.get("lfi_findings", []) or []), "max_cvss": max_cvss, "max_epss": max_epss,
                 "crit_asset": _asset_crit(lbl), "hdr": _audit_headers(fp),
                 "tls_version": fp.get("tls_version"), "cert_days_left": fp.get("cert_days_left"),
@@ -6341,8 +6343,12 @@ def _build_pdf(data, charts, output_path, font):
                        "<b>สีจาง (ว่าง)</b> = ไม่เกี่ยวข้อง (ไม่ได้ใช้ซอฟต์แวร์นี้)", note))
         story.append(Spacer(1, 0.2 * cm))
 
-        _CATO = {"NGINX": 0, "PHP": 1, "Node.js": 2, "GitLab": 3, "Other": 9}
-        _CATC = {"NGINX": "N", "PHP": "P", "Node.js": "J", "GitLab": "G", "Other": "X"}
+        _CATO = {"NGINX": 0, "PHP": 1, "Node.js": 2, "GitLab": 3, "App": 4, "Device": 5,
+                 "Component": 6, "Exposure": 7, "Framework": 8, "Headers": 9, "TLS": 10,
+                 "Online CVE": 11, "Other": 99}
+        _CATC = {"NGINX": "N", "PHP": "P", "Node.js": "J", "GitLab": "G", "App": "A",
+                 "Device": "D", "Component": "C", "Exposure": "E", "Framework": "F",
+                 "Headers": "H", "TLS": "T", "Online CVE": "O", "Other": "X"}
         # รวบรวมคอลัมน์ CVE จากทุกโฮสต์ที่เข้าถึงได้
         _cvem = {}
         for _h in hs:
@@ -7391,6 +7397,7 @@ def _build_html_dashboard(data, path):
     hosts_js = [{"host": h["host"], "ip": h.get("ip", ""), "reachable": h["reachable"],
                  "server": h["server"] or "", "php": h["php"] or "", "cms": h["cms"] or "",
                  "stack": h.get("stack", []), "waf": h.get("waf", ""), "device": h.get("device", ""),
+                 "os": h.get("os", ""), "components": h.get("components", []),
                  "lfi": h["lfi"], "score": h["risk_score"], "maxcvss": h.get("max_cvss", 0),
                  "level": h["risk_level"], **h["counts"],
                  "hdr": h.get("hdr", {}),
@@ -8467,27 +8474,33 @@ function togIPRow(uid){
 }
 
 // ── 6. Dynamic Matrix (โฮสต์ × CVE) ──
+var MX_PFX = {'NGINX':'N','PHP':'P','Node.js':'J','GitLab':'G','App':'A','Device':'D',
+              'Component':'C','Exposure':'E','Framework':'F','Headers':'H','TLS':'T','Online CVE':'O'};
+var MX_ORD = {'NGINX':0,'PHP':1,'Node.js':2,'GitLab':3,'App':4,'Device':5,'Component':6,
+              'Exposure':7,'Framework':8,'Headers':9,'TLS':10,'Online CVE':11};
 function getAllCVEList(){
   const map = {};
-  const catCounts = {};
   D.findings.forEach(f => {
-    if(!f.cve) return;
-    if(!map[f.cve]){
-      const cat = f.cat || 'Other';
-      const pfx = (cat[0] || 'X').toUpperCase();
-      catCounts[pfx] = (catCounts[pfx] || 0) + 1;
-      const code = pfx + catCounts[pfx];
-      map[f.cve] = {
-        code: code,
-        cve: f.cve,
-        cat: cat,
-        sev: f.sev || 'Info',
-        name: f.name || f.cve,
-        cvss: (f.base_cvss != null ? f.base_cvss : (f.cvss || 0))
-      };
-    }
+    if(!f.cve || map[f.cve]) return;
+    map[f.cve] = {cve: f.cve, cat: f.cat || 'Other', sev: f.sev || 'Info',
+                  name: f.name || f.cve,
+                  cvss: (f.base_cvss != null ? f.base_cvss : (f.cvss || 0))};
   });
-  return Object.values(map);
+  // เรียงให้คอลัมน์หมวดเดียวกันอยู่ติดกัน (ตามลำดับหมวด แล้วตาม CVE id)
+  const arr = Object.values(map).sort((a, b) => {
+    const oa = (MX_ORD[a.cat] != null ? MX_ORD[a.cat] : 99);
+    const ob = (MX_ORD[b.cat] != null ? MX_ORD[b.cat] : 99);
+    if(oa !== ob) return oa - ob;
+    return a.cve < b.cve ? -1 : (a.cve > b.cve ? 1 : 0);
+  });
+  // ให้รหัสต่อเนื่องต่อ prefix (N1,N2,... / P1,P2,...) — prefix ไม่ชนกันแล้ว
+  const seen = {};
+  arr.forEach(c => {
+    const pfx = MX_PFX[c.cat] || (c.cat[0] || 'X').toUpperCase();
+    seen[pfx] = (seen[pfx] || 0) + 1;
+    c.code = pfx + seen[pfx];
+  });
+  return arr;
 }
 
 function renderMatrixTable(data){
@@ -8621,10 +8634,30 @@ function openDr(hostname, forceAll){
   html += `<div class="dr-info">
     <div class="dr-info-cell"><div class="lab">IP Address</div>
       <div class="val" style="font-family:monospace;color:#1d4ed8">${esc(h.ip)||'<span style="color:#9aa0ab;font-weight:400">ยังไม่ระบุ</span>'}</div></div>
+    <div class="dr-info-cell"><div class="lab">OS / ระบบปฏิบัติการ</div><div class="val">${esc(h.os)||'ไม่ทราบ'}</div></div>
     <div class="dr-info-cell"><div class="lab">เซิร์ฟเวอร์</div><div class="val">${esc(h.server)||'ไม่ทราบ'}</div></div>
     <div class="dr-info-cell"><div class="lab">PHP Version</div><div class="val">${esc(h.php)||'—'}</div></div>
-    <div class="dr-info-cell"><div class="lab">CMS</div><div class="val">${esc(h.cms)||'—'}</div></div>
+    <div class="dr-info-cell"><div class="lab">CMS / App</div><div class="val">${esc(h.cms)||'—'}</div></div>
+    <div class="dr-info-cell"><div class="lab">WAF / Proxy</div><div class="val">${esc(h.waf)||'—'}</div></div>
+    ${h.device ? `<div class="dr-info-cell"><div class="lab">อุปกรณ์/แพลตฟอร์ม</div><div class="val">${esc(h.device)}</div></div>` : ''}
   </div>`;
+
+  // Stack profile + ส่วนประกอบอื่น (ชั้นที่ตรวจพบ)
+  if((h.stack && h.stack.length) || (h.components && h.components.length)){
+    html += `<div class="dr-sec" style="padding-top:10px">`;
+    if(h.stack && h.stack.length){
+      html += `<h4>โปรไฟล์สแตก (Stack Fingerprint)</h4>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px">` +
+        h.stack.map(s => `<span class="tag" style="background:#eef2fb;color:var(--ink);border:1px solid #c5d2f6">${esc(s)}</span>`).join('<span style="color:#9aa0ab">→</span>') +
+        `</div>`;
+    }
+    if(h.components && h.components.length){
+      html += `<div style="font-size:12px;color:var(--muted)">🧩 ส่วนประกอบอื่น (DB/JS/tool): ` +
+        h.components.map(c => `<b style="color:var(--ink)">${esc(c.name)}${c.version?(' '+esc(c.version)):''}</b>`).join(', ') +
+        `</div>`;
+    }
+    html += `</div>`;
+  }
 
   // Filter Notification Banner inside Drawer
   if(data.isFiltered && rawH.findings && rawH.findings.length !== finds.length){
