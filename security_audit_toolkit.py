@@ -1055,21 +1055,163 @@ def _fingerprint(session, base, prefix, timeout, verbose=False):
     return fp
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# App/CMS version detection (กลุ่ม 1 ของ ThaiCERT) — ดึง "เลขเวอร์ชันของแอป"
+# เพื่อนำไปเทียบ CVE ต่อ (offline EOL flag + online lookup ใน _online_app_cves)
+# ═══════════════════════════════════════════════════════════════════════
+def _app_ver_tuple(s):
+    """'30.0.1' / '6.5' / '7.98' → (a,b,c) เติมให้ครบ 3 ช่อง; None ถ้าไม่พบตัวเลข"""
+    m = re.search(r"(\d+)(?:\.(\d+))?(?:\.(\d+))?", s or "")
+    if not m:
+        return None
+    return (int(m.group(1)), int(m.group(2) or 0), int(m.group(3) or 0))
+
+
+# สาขาหลักที่ "สิ้นสุดการสนับสนุนแน่นอน" (ข้อเท็จจริงที่ยืนยันได้ — ใช้ flag รุ่นเก่าแบบ offline)
+# รายละเอียด CVE เฉพาะเจาะจงปล่อยให้ online lookup เสริม (hybrid)
+APP_EOL_MAJOR = {
+    "WordPress": (5, "WordPress < 5.x เป็นรุ่นเก่ามาก (ก่อนปี 2018) ไม่ได้รับแพตช์ความปลอดภัยสาขาเดิม"),
+    "Joomla":    (4, "Joomla < 4.x สิ้นสุดการสนับสนุนแล้ว (สาขา 1.x / 2.5 / 3.x EOL)"),
+    "Drupal":    (10, "Drupal < 10 สิ้นสุดการสนับสนุนแล้ว (สาขา 7 / 8 / 9 EOL)"),
+    "Nextcloud": (26, "Nextcloud < 26 เป็นรุ่นเก่า (แต่ละ major รองรับราว 1 ปี) ควรตรวจสถานะแพตช์"),
+}
+
+
+def _detect_app_versions(session, base, prefix, timeout, cms, root_html="", meta_gen=""):
+    """ดึงเวอร์ชัน core ของแอป + ปลั๊กอิน WordPress (เบา ๆ) — คืน dict
+    {product, version(tuple), version_str, source, plugins:[{slug,version}]}"""
+    out = {"product": cms, "version": None, "version_str": "", "source": "", "plugins": []}
+
+    def _get(path):
+        try:
+            return session.get(base + prefix + path, timeout=min(timeout, 6.0), allow_redirects=True)
+        except requests.RequestException:
+            return None
+
+    try:
+        # Nextcloud — status.php คืน JSON เวอร์ชันเป๊ะ (ตรวจเสมอ เพราะไม่เข้า CMS_PATTERNS)
+        if cms in (None, "Nextcloud"):
+            r = _get("/status.php")
+            if r is not None and r.status_code == 200 and "version" in (r.text or "").lower():
+                try:
+                    j = r.json()
+                    vs = (j.get("versionstring") or j.get("version") or "").strip()
+                    if vs and (j.get("installed") or j.get("version")):
+                        out.update(product="Nextcloud", version=_app_ver_tuple(vs),
+                                   version_str=vs, source="status.php")
+                        return out
+                except ValueError:
+                    pass
+
+        if cms == "WordPress":
+            vstr, src = "", ""
+            m = re.search(r"wordpress\s+([\d.]+)", meta_gen or "", re.I)
+            if m:
+                vstr, src = m.group(1), "meta generator"
+            if not vstr:
+                r = _get("/readme.html")
+                if r is not None and r.status_code == 200:
+                    m = re.search(r"[Vv]ersion\s+([\d.]+)", r.text or "")
+                    if m:
+                        vstr, src = m.group(1), "readme.html"
+            if not vstr:
+                r = _get("/?feed=rss2")
+                if r is not None and r.status_code == 200:
+                    m = re.search(r"wordpress\.org/\?v=([\d.]+)", r.text or "", re.I)
+                    if m:
+                        vstr, src = m.group(1), "rss generator"
+            if vstr:
+                out.update(version=_app_ver_tuple(vstr), version_str=vstr, source=src)
+            # ปลั๊กอินจาก ?ver= ใน HTML หน้าแรก (ไม่ยิง request เพิ่ม)
+            seen = {}
+            for pm in re.finditer(r"/wp-content/plugins/([A-Za-z0-9._-]+)/[^\"'>]*?\?ver=([\d.]+)", root_html or ""):
+                seen.setdefault(pm.group(1), pm.group(2))
+            out["plugins"] = [{"slug": s, "version": v} for s, v in list(seen.items())[:30]]
+
+        elif cms == "Drupal":
+            for path in ("/CHANGELOG.txt", "/core/CHANGELOG.txt"):
+                r = _get(path)
+                if r is not None and r.status_code == 200 and r.text:
+                    m = re.search(r"Drupal\s+([\d.]+)", r.text)
+                    if m:
+                        out.update(version=_app_ver_tuple(m.group(1)), version_str=m.group(1),
+                                   source=path.lstrip("/"))
+                        break
+
+        elif cms == "Joomla":
+            r = _get("/administrator/manifests/files/joomla.xml")
+            if r is not None and r.status_code == 200 and r.text:
+                m = re.search(r"<version>\s*([\d.]+)\s*</version>", r.text)
+                if m:
+                    out.update(version=_app_ver_tuple(m.group(1)), version_str=m.group(1),
+                               source="joomla.xml")
+    except Exception:
+        pass
+    return out
+
+
+def _analyze_apps(cms_info):
+    """สร้าง finding จากเวอร์ชันแอป (offline): flag รุ่น EOL/เก่ามาก + เป็น hook ให้ online CVE เสริม
+    คืน {key: finding} รูปแบบเดียวกับ CVE อื่น ๆ (pseudo-id ขึ้นต้น APP-)"""
+    out = {}
+    app = (cms_info or {}).get("app") or {}
+    product = app.get("product") or (cms_info or {}).get("cms")
+    vt, vs = app.get("version"), app.get("version_str", "")
+    if not product or not vt:
+        return out
+    eol = APP_EOL_MAJOR.get(product)
+    key = f"APP-{product}"
+    src = app.get("source", "")
+    if eol and vt[0] < eol[0]:
+        out[key] = {
+            "cve": key, "name": f"{product} {vs} — รุ่นเก่า/สิ้นสุดการสนับสนุน",
+            "severity": "High", "trigger": "เทียบเลขเวอร์ชันแอปกับสาขาที่ยังได้รับแพตช์",
+            "host_check": f"อัปเดต {product} เป็นสาขาล่าสุดที่รองรับ แล้วตรวจ CVE ที่เกี่ยวข้อง",
+            "status": "vulnerable-version",
+            "reason": f"ตรวจพบ {product} {vs} (จาก {src}) — {eol[1]} ควรอัปเดตและตรวจ CVE ที่เกี่ยวข้อง",
+        }
+    else:
+        out[key] = {
+            "cve": key, "name": f"{product} {vs} — ตรวจพบเวอร์ชัน",
+            "severity": "Low", "trigger": "ตรวจพบเวอร์ชันแอป",
+            "host_check": f"ตรวจว่า {product} {vs} เป็นรุ่นล่าสุดและได้รับแพตช์ล่าสุด",
+            "status": "unknown",
+            "reason": f"ตรวจพบ {product} {vs} (จาก {src}) — เปิด online CVE lookup เพื่อตรวจช่องโหว่ที่ทราบ",
+        }
+    plugins = app.get("plugins") or []
+    if plugins:
+        plist = ", ".join(f"{p['slug']} {p['version']}" for p in plugins[:10])
+        out[key]["reason"] += f" | ปลั๊กอินที่พบ: {plist}"
+    return out
+
+
 def _detect_cms(session, base, prefix, timeout, all_urls):
     hits = {}
     for url in all_urls:
         for cms, pats in CMS_PATTERNS:
             if any(re.search(p, url) for p in pats):
                 hits[cms] = hits.get(cms, 0) + 1
+    root_html, meta_gen = "", ""
     try:
         r = session.get(base + prefix + "/", timeout=timeout)
-        p = _LinkParser(); p.feed(r.text)
-        if p.meta_generator and "wordpress" in p.meta_generator.lower():
+        root_html = r.text or ""
+        p = _LinkParser(); p.feed(root_html)
+        meta_gen = p.meta_generator or ""
+        mg_low = meta_gen.lower()
+        if "wordpress" in mg_low:
             hits["WordPress"] = hits.get("WordPress", 0) + 1
+        if "joomla" in mg_low:
+            hits["Joomla"] = hits.get("Joomla", 0) + 1
+        if "drupal" in mg_low:
+            hits["Drupal"] = hits.get("Drupal", 0) + 1
     except requests.RequestException:
         pass
     cms = max(hits.items(), key=lambda x: x[1])[0] if hits else None
-    return {"cms": cms, "hits": hits}
+    app = _detect_app_versions(session, base, prefix, timeout, cms, root_html, meta_gen)
+    # status.php อาจยืนยันว่าเป็น Nextcloud แม้ไม่เข้า CMS_PATTERNS
+    if (not cms or cms != app.get("product")) and app.get("product") == "Nextcloud":
+        cms = "Nextcloud"
+    return {"cms": cms, "hits": hits, "app": app}
 
 
 def _detect_session(session, base, prefix, endpoints, timeout):
@@ -2202,10 +2344,11 @@ def scan_single_target(target_str, opts, idx=1, total=1):
     _v and print(f"    Crawl: {len(visited)} pages, {len(endpoints)} endpoints")
 
     cms_info = _detect_cms(session, base, path_prefix, opts["timeout"], all_urls)
-    if cms_info.get("cms") in ("WordPress", "Drupal", "Joomla"):
+    if cms_info.get("cms") in ("WordPress", "Drupal", "Joomla", "Nextcloud"):
         fp["php_detected"] = True
         if f"CMS:{cms_info['cms']}" not in fp.get("php_evidence", []):
             fp.setdefault("php_evidence", []).append(f"CMS:{cms_info['cms']}")
+    app_cves = _analyze_apps(cms_info)
     session_info = _detect_session(session, base, path_prefix, endpoints, opts["timeout"])
     if session_info.get("session_used"):
         fp["php_detected"] = True
@@ -2259,10 +2402,12 @@ def scan_single_target(target_str, opts, idx=1, total=1):
 
     all_r = (list(nginx_cves.values()) + list(php_cves.values()) +
              ([cve_115560] if cve_115560 else []) +
-             list(nodejs_cves.values()) + list(gitlab_cves.values()))
+             list(nodejs_cves.values()) + list(gitlab_cves.values()) +
+             list(app_cves.values()))
 
     if selected:
-        all_r = [r for r in all_r if r.get("cve") in selected or r.get("cve", "").startswith("UNSUPPORTED-")]
+        all_r = [r for r in all_r if r.get("cve") in selected
+                 or r.get("cve", "").startswith(("UNSUPPORTED-", "APP-"))]
     vuln_cnt = sum(1 for r in all_r if r["status"] in ("vulnerable", "high-risk", "likely-vulnerable", "unpatched"))
     warn_cnt = sum(1 for r in all_r if r["status"] in ("medium-risk", "vulnerable-version", "vulnerable-conditions"))
     crit = vuln_cnt + warn_cnt
