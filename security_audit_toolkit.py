@@ -3922,10 +3922,10 @@ def _hlabel(t):
     return t.replace("https://", "").replace("http://", "").rstrip("/")[:40]
 
 
-# พอร์ตเว็บ/อุปกรณ์ที่ใช้ "เคาะ" หาโฮสต์มีชีวิต (TCP connect — ไม่พึ่ง ICMP จึงใช้ได้แม้ปิดปิง)
-# พอร์ตเช็ก "มีชีวิตไหม" (เร็ว — เจอพอร์ตแรกก็พอ)
+# พอร์ตเว็บ/อุปกรณ์ที่ใช้ "เคาะ" หาโฮสต์ที่ตอบสนอง (TCP connect — ไม่พึ่ง ICMP จึงใช้ได้แม้ปิดปิง)
+# พอร์ตเช็ก "โฮสต์ตอบสนองไหม" (เร็ว — เจอพอร์ตแรกก็พอ)
 _LIVENESS_PORTS = [80, 443, 8080, 8443, 22]
-# พอร์ตเว็บ/แอดมิน/อุปกรณ์ ที่จะ "ไล่หาให้ครบ" บนโฮสต์ที่มีชีวิต แล้วสแกนทุกพอร์ตที่เปิด (แก้ปัญหา 'ใช้พอร์ตอื่นจะไม่เจอ')
+# พอร์ตเว็บ/แอดมิน/อุปกรณ์ ที่จะ "ไล่หาให้ครบ" บนโฮสต์ที่ตอบสนอง แล้วสแกนทุกพอร์ตที่เปิด (แก้ปัญหา 'ใช้พอร์ตอื่นจะไม่เจอ')
 _WEB_PORTS = [80, 443, 8080, 8443, 8000, 8008, 8888, 10000, 2082, 2083, 2086, 2087, 2095, 2096]
 _WEB_PORTS_LAN = _WEB_PORTS + [81, 82, 88, 591, 7001, 7080, 8081, 8082, 8088, 8181, 8800,
                                9000, 9080, 9090, 9091, 9443, 10443, 4443, 5000, 5001, 3000,
@@ -3933,7 +3933,7 @@ _WEB_PORTS_LAN = _WEB_PORTS + [81, 82, 88, 591, 7001, 7080, 8081, 8082, 8088, 81
 
 
 def _host_liveness(target, ports, timeout):
-    """เช็กมีชีวิต (เจอพอร์ตเปิดพอร์ตแรกก็พอ) — คืน (ip|None, alive)"""
+    """ตรวจว่าโฮสต์ตอบสนอง (เจอพอร์ตเปิดพอร์ตแรกก็พอ) — คืน (ip|None, alive)"""
     import socket
     h = target.replace("https://", "").replace("http://", "").split("/")[0].split(":")[0]
     try:
@@ -3965,8 +3965,8 @@ def _port_target(base_target, ip_or_host, port):
 
 def _discover_alive(targets, opts):
     """Host discovery 2 เฟส:
-      เฟส 1 — เช็กมีชีวิต (เจอพอร์ตเว็บเปิดพอร์ตแรกก็พอ) ข้ามไอพีตายเร็ว ไม่รอ HTTP timeout 8s
-      เฟส 2 — บนโฮสต์ที่มีชีวิต 'ไล่หาพอร์ตเว็บให้ครบ' แล้วสแกนทุกพอร์ตที่เปิด (เจอเว็บบนพอร์ตแปลก ๆ ด้วย)
+      เฟส 1 — ค้นหาโฮสต์ที่ตอบสนอง (เจอพอร์ตเว็บเปิดพอร์ตแรกก็พอ) ข้ามไอพีตายเร็ว ไม่รอ HTTP timeout 8s
+      เฟส 2 — บนโฮสต์ที่ตอบสนอง 'ไล่หาพอร์ตเว็บให้ครบ' แล้วสแกนทุกพอร์ตที่เปิด (เจอเว็บบนพอร์ตแปลก ๆ ด้วย)
     ใช้ TCP connect ล้วน (ไม่พึ่ง ICMP → ปิดปิงก็ใช้ได้)
     คืน (scan_targets, dead_results); dead บันทึกเป็น 'เข้าไม่ถึง' เพื่อให้ยอดรวมในรายงานตรง"""
     lan = opts.get("scan_mode") == "lan"
@@ -3975,7 +3975,7 @@ def _discover_alive(targets, opts):
     total = len(targets)
     workers = min(128, max(8, total))
     print(f"  🔎 Host discovery (TCP · ไม่พึ่งปิง) บน {total} เป้าหมาย ด้วย {workers} threads · "
-          f"timeout {dt}s/พอร์ต — เฟส 1: เช็กมีชีวิต …")
+          f"timeout {dt}s/พอร์ต — เฟส 1: ค้นหาโฮสต์ที่ตอบสนอง …")
     alive_ips, dead = [], []
     done = {"n": 0}
     dlock = Lock()
@@ -3995,10 +3995,10 @@ def _discover_alive(targets, opts):
                              "error": "ไม่พบพอร์ตเว็บเปิด (ข้ามจาก host discovery)"})
             with dlock:
                 done["n"] += 1
-                sys.stdout.write(f"\r\033[K  🔎 เฟส 1: ตรวจแล้ว {done['n']}/{total} · มีชีวิต {len(alive_ips)}")
+                sys.stdout.write(f"\r\033[K  🔎 เฟส 1: ตรวจแล้ว {done['n']}/{total} · พบโฮสต์ {len(alive_ips)}")
                 sys.stdout.flush()
     # เฟส 2 — ไล่พอร์ตเว็บให้ครบ: ยิง (โฮสต์ × พอร์ต) เป็น task แบนขนานกันทั้งหมด → เร็วสุด
-    print(f"\r\033[K  🔎 เฟส 2: ไล่พอร์ตเว็บให้ครบบน {len(alive_ips)} โฮสต์มีชีวิต "
+    print(f"\r\033[K  🔎 เฟส 2: ไล่พอร์ตเว็บให้ครบบน {len(alive_ips)} โฮสต์ที่พบ "
           f"({len(enum_ports)} พอร์ต/โฮสต์) …")
     import socket as _sock
     open_map = {ip: set() for (_t, ip) in alive_ips}
@@ -4022,7 +4022,7 @@ def _discover_alive(targets, opts):
                     open_map[ip].add(port)
     scan_targets, svc_count = [], 0
     for (t, ip) in alive_ips:
-        ports = sorted(open_map.get(ip) or {443})  # มีชีวิตแต่ไล่ไม่เจอ → สแกน https ปกติ
+        ports = sorted(open_map.get(ip) or {443})  # โฮสต์ตอบสนองแต่ไล่พอร์ตไม่เจอ → สแกน https ปกติ
         seen = set()
         for p in ports:
             url = _port_target(t[0], ip, p)
@@ -4030,7 +4030,7 @@ def _discover_alive(targets, opts):
                 seen.add(url)
                 scan_targets.append((url, t[1]))
                 svc_count += 1
-    print(f"  ✅ Host discovery เสร็จ: มีชีวิต {len(alive_ips)}/{total} โฮสต์ · "
+    print(f"  ✅ Host discovery เสร็จ: พบโฮสต์ที่ตอบสนอง {len(alive_ips)}/{total} · "
           f"พบ {svc_count} web service (รวมพอร์ตนอกมาตรฐาน) · ข้าม {len(dead)} ไอพีที่ไม่มีเว็บ "
           f"→ สแกนเชิงลึก {svc_count} รายการ")
     return scan_targets, dead
