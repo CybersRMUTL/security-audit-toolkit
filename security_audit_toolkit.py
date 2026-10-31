@@ -311,6 +311,43 @@ SERVER_SIGS = [(re.compile(r"apache(?:/(\S+))?", re.I), "Apache"),
                (re.compile(r"litespeed", re.I), "LiteSpeed"),
                (re.compile(r"openresty", re.I), "OpenResty")]
 
+# OS token ที่รั่วใน Server header ของ Apache เช่น "Apache/2.4.41 (Ubuntu)" / "(Red Hat)" / "(Win64)"
+OS_PAREN_RE = re.compile(r"\(([^)]{2,40})\)")
+# โมดูลที่มักติดมากับ Server header พร้อมเวอร์ชัน (เอาไปเทียบ CVE ได้ เช่น OpenSSL)
+MODULE_VER_RE = re.compile(
+    r"\b(OpenSSL|mod_ssl|mod_fcgid|mod_jk|mod_perl|mod_wsgi|mod_security2?|"
+    r"Phusion_Passenger|Passenger|Python|Perl|Tomcat|Jetty|Coyote)/([\w.]+)", re.I)
+
+# ชนิดอุปกรณ์/แพลตฟอร์ม (กลุ่ม 3/4/6 ThaiCERT) — ตรวจจาก header+cookie+body+title
+# แต่ละตัว: (ชื่อ, [regex สัญญาณใด ๆ ที่ match ใน blob], regex ดึง firmware version หรือ None, หมวด)
+DEVICE_SIGS = [
+    ("Synology DSM",       [r"\bsynology\b", r"x-syno", r"/webman/", r"synohdpack", r"syno_"], r"(?:DSM|dsm)[^\d]{0,6}([\d.]+)", "NAS"),
+    ("QNAP QTS",           [r"\bqnap\b", r"/cgi-bin/filemanager", r"\bQTS\b", r"quts hero"], r"QTS[^\d]{0,6}([\d.]+)", "NAS"),
+    ("TrueNAS/FreeNAS",    [r"truenas", r"freenas"], r"TrueNAS[- ]?([\d.]+)", "NAS"),
+    ("WD MyCloud",         [r"wd\s*mycloud", r"western digital"], None, "NAS"),
+    ("Asustor ADM",        [r"asustor", r"\bADM\b"], None, "NAS"),
+    ("pfSense",            [r"pfsense"], r"pfSense[ /]+([\d.]+)", "Firewall"),
+    ("OPNsense",           [r"opnsense"], None, "Firewall"),
+    ("Fortinet FortiGate", [r"fortigate", r"fortios", r"x-forti"], None, "Firewall"),
+    ("Sophos",             [r"\bsophos\b"], None, "Firewall"),
+    ("Ubiquiti UniFi",     [r"\bunifi\b", r"ubiquiti"], None, "Network"),
+    ("MikroTik RouterOS",  [r"mikrotik", r"routeros"], r"RouterOS[ /]+([\d.]+)", "Network"),
+    ("CUPS Printer",       [r"\bCUPS\b", r"\bIPP/"], r"CUPS/([\d.]+)", "Printer"),
+    ("cPanel",             [r"\bcpanel\b", r"x-cpanel"], None, "Control Panel"),
+    ("Plesk",              [r"\bplesk\b"], r"Plesk[ /]+v?([\d.]+)", "Control Panel"),
+    ("DirectAdmin",        [r"directadmin"], None, "Control Panel"),
+    ("Webmin",             [r"\bwebmin\b"], r"Webmin[ /]+([\d.]+)", "Control Panel"),
+]
+
+# ชั้น container / reverse-proxy ที่ "เห็นจากภายนอกได้" (ชั้นในอื่น ๆ ต้องยืนยันบนเครื่อง)
+CONTAINER_SIGS = [
+    ("Traefik",            [r"\btraefik\b"]),
+    ("Kubernetes Ingress", [r"x-kubernetes", r"x-k8s", r"ingress-nginx"]),
+    ("Envoy/Istio",        [r"\benvoy\b", r"x-envoy", r"istio"]),
+    ("HAProxy",            [r"\bhaproxy\b"]),
+    ("Docker (XAMPP/compose hint)", [r"\bxampp\b"]),
+]
+
 CMS_PATTERNS = [
     ("WordPress", [r"/wp-content/", r"/wp-includes/", r"/wp-json/"]),
     ("Drupal", [r"/sites/default/", r"/sites/all/"]),
@@ -824,7 +861,9 @@ def _fingerprint(session, base, prefix, timeout, verbose=False):
           "http3_port": 443, "tls_hint": False, "tls_ticket_supported": None,
           "tls_session_reused": None, "tls_ticket_inconsistent": False,
           "nodejs_detected": False, "nodejs_versions": [],
-          "nodejs_frameworks": [], "cdn_proxy": None, "headers": {}}
+          "nodejs_frameworks": [], "cdn_proxy": None, "headers": {},
+          "os_version": "", "modules": {}, "device": None, "device_version": "",
+          "device_category": "", "container_layers": []}
     node_vers, node_fws = set(), set()
     php_ev = set()
 
@@ -892,6 +931,39 @@ def _fingerprint(session, base, prefix, timeout, verbose=False):
         if any(m_str in body_low for m_str in ("/wp-content/", "/wp-includes/", "drupal.settings", "/sites/default/files/")):
             fp["php_detected"] = True
             php_ev.add("PHP CMS asset marker")
+
+        # ── Deep fingerprint: OS version token, server modules, device/NAS, container layer ──
+        # blob รวมทุกแหล่ง (header ทั้งก้อน + cookie + body + title) สำหรับ signature matching
+        all_hdr_blob = " ".join(f"{k}: {v}" for k, v in r.headers.items())
+        dev_blob = f"{all_hdr_blob}\n{sc}\n{body_head[:12000]}"
+        dev_blob_low = dev_blob.lower()
+        # OS token ใน Server header ของ Apache เช่น "(Ubuntu)" "(Red Hat...)" "(Win64)"
+        if not fp["os_version"]:
+            om = OS_PAREN_RE.search(server)
+            if om:
+                tok = om.group(1).strip()
+                if re.search(r"ubuntu|debian|centos|red ?hat|rhel|alpine|win|fedora|suse|amazon|oracle|unix", tok, re.I):
+                    fp["os_version"] = tok
+                    if fp["os"] == "Unknown":
+                        fp["os"] = tok
+        # โมดูลเซิร์ฟเวอร์พร้อมเวอร์ชัน (เช่น OpenSSL/1.1.1f) — เก็บไว้เทียบ CVE
+        for mm in MODULE_VER_RE.finditer(combined_hdr):
+            fp["modules"].setdefault(mm.group(1), mm.group(2))
+        # ชนิดอุปกรณ์ / NAS / appliance / control panel
+        if not fp["device"]:
+            for name, sigs, ver_re, cat in DEVICE_SIGS:
+                if any(re.search(s, dev_blob_low) for s in sigs):
+                    fp["device"] = name
+                    fp["device_category"] = cat
+                    if ver_re:
+                        vm = re.search(ver_re, dev_blob, re.I)
+                        if vm:
+                            fp["device_version"] = vm.group(1)
+                    break
+        # ชั้น container / reverse-proxy ที่เห็นจากภายนอก
+        for name, sigs in CONTAINER_SIGS:
+            if name not in fp["container_layers"] and any(re.search(s, dev_blob_low) for s in sigs):
+                fp["container_layers"].append(name)
 
         # ตรวจจับ CDN / Reverse Proxy ที่คั่นหน้าเซิร์ฟเวอร์จริง
         hdr_keys = {k.lower() for k in r.headers.keys()}
@@ -1183,6 +1255,57 @@ def _analyze_apps(cms_info):
         plist = ", ".join(f"{p['slug']} {p['version']}" for p in plugins[:10])
         out[key]["reason"] += f" | ปลั๊กอินที่พบ: {plist}"
     return out
+
+
+def _analyze_device(fp):
+    """finding จากชนิดอุปกรณ์/NAS/appliance ที่ตรวจพบ (hook ให้ online CVE firmware เสริมใน increment ถัดไป)"""
+    out = {}
+    dev = (fp or {}).get("device")
+    if not dev:
+        return out
+    ver = fp.get("device_version", "")
+    cat = fp.get("device_category", "") or "อุปกรณ์"
+    key = f"DEVICE-{dev}"
+    out[key] = {
+        "cve": key,
+        "name": f"{dev}{(' ' + ver) if ver else ''} — {cat}",
+        "severity": "Medium" if ver else "Low",
+        "trigger": "ตรวจพบ signature อุปกรณ์/แพลตฟอร์ม",
+        "host_check": f"ตรวจรุ่น firmware ของ {dev} และอัปเดตตาม advisory ของผู้ผลิต",
+        "status": "unknown",
+        "reason": (f"ตรวจพบ {dev}" + (f" firmware {ver}" if ver else " (เวอร์ชันถูกซ่อน)")
+                   + f" — หมวด {cat}; อุปกรณ์กลุ่มนี้มี CVE firmware ของตัวเอง ควรตรวจรุ่นและ advisory ผู้ผลิต"
+                   + ("" if ver else " และยืนยันเวอร์ชันบนอุปกรณ์")),
+    }
+    return out
+
+
+def _stack_profile(fp, cms_info):
+    """สรุปสแตกเป็นชั้น ๆ สำหรับแสดงผล: OS → device → server → container → runtime → app"""
+    layers = []
+    if fp.get("device"):
+        layers.append(f"{fp['device']}" + (f" {fp['device_version']}" if fp.get("device_version") else ""))
+    osv = fp.get("os_version") or (fp.get("os") if fp.get("os") != "Unknown" else "")
+    if osv:
+        layers.append(f"OS: {osv}")
+    if fp.get("server_family") and fp["server_family"] != "Unknown":
+        layers.append(f"{fp['server_family']}" + (f"/{fp['server_version']}" if fp.get("server_version") else ""))
+    for layer in fp.get("container_layers", []):
+        layers.append(layer)
+    if fp.get("php_versions"):
+        layers.append("PHP/" + ", ".join(sorted(fp["php_versions"])))
+    elif fp.get("php_detected"):
+        layers.append("PHP (เวอร์ชันไม่เปิดเผย)")
+    for fw in fp.get("nodejs_frameworks", []):
+        layers.append(fw)
+    app = (cms_info or {}).get("app") or {}
+    if app.get("product") and app.get("version_str"):
+        layers.append(f"{app['product']} {app['version_str']}")
+    elif (cms_info or {}).get("cms"):
+        layers.append(cms_info["cms"])
+    if app.get("plugins"):
+        layers.append(f"+{len(app['plugins'])} WP plugin")
+    return layers
 
 
 def _detect_cms(session, base, prefix, timeout, all_urls):
@@ -2349,6 +2472,9 @@ def scan_single_target(target_str, opts, idx=1, total=1):
         if f"CMS:{cms_info['cms']}" not in fp.get("php_evidence", []):
             fp.setdefault("php_evidence", []).append(f"CMS:{cms_info['cms']}")
     app_cves = _analyze_apps(cms_info)
+    device_cves = _analyze_device(fp)
+    fp["stack_layers"] = _stack_profile(fp, cms_info)
+    _v and fp["stack_layers"] and print(f"    Stack: {' → '.join(fp['stack_layers'])}")
     session_info = _detect_session(session, base, path_prefix, endpoints, opts["timeout"])
     if session_info.get("session_used"):
         fp["php_detected"] = True
@@ -2403,11 +2529,11 @@ def scan_single_target(target_str, opts, idx=1, total=1):
     all_r = (list(nginx_cves.values()) + list(php_cves.values()) +
              ([cve_115560] if cve_115560 else []) +
              list(nodejs_cves.values()) + list(gitlab_cves.values()) +
-             list(app_cves.values()))
+             list(app_cves.values()) + list(device_cves.values()))
 
     if selected:
         all_r = [r for r in all_r if r.get("cve") in selected
-                 or r.get("cve", "").startswith(("UNSUPPORTED-", "APP-"))]
+                 or r.get("cve", "").startswith(("UNSUPPORTED-", "APP-", "DEVICE-"))]
     vuln_cnt = sum(1 for r in all_r if r["status"] in ("vulnerable", "high-risk", "likely-vulnerable", "unpatched"))
     warn_cnt = sum(1 for r in all_r if r["status"] in ("medium-risk", "vulnerable-version", "vulnerable-conditions"))
     crit = vuln_cnt + warn_cnt
