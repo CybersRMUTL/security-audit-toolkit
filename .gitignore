@@ -16,6 +16,11 @@ reports/
 *.pdf
 # ...except the presentation deck, which is meant to be published
 !security_audit_toolkit.pdf
+# Report files by name — block even when generated outside reports/
+dashboard_*.html
+report_*.xlsx
+report_*_findings.csv
+report_*_ip.csv
 
 # Target / host lists (real infrastructure — keep private)
 *hosts*.txt
