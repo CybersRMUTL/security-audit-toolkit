@@ -1660,9 +1660,23 @@ def _probe_tls(host, port, timeout, fp=None):
     return out
 
 
-def _probe_os(host, fp, timeout):
+def _is_private_ip(ip):
+    """IP อยู่ในวง LAN (RFC1918 / loopback / link-local) หรือไม่ — True/False/None(ระบุไม่ได้)"""
+    import ipaddress
+    if not ip:
+        return None
+    try:
+        a = ipaddress.ip_address(ip)
+        return bool(a.is_private or a.is_loopback or a.is_link_local)
+    except ValueError:
+        return None
+
+
+def _probe_os(host, fp, timeout, lan=False):
     """เสริมการระบุ OS แบบหลายแหล่ง + ติดป้ายที่มา/ความเชื่อมั่น (ไม่รับประกันถูก 100%):
-    1) Server header (เชื่อถือสูง) 2) nmap -O ถ้ามี (ปานกลาง-สูง +%) 3) TTL heuristic (ต่ำ)"""
+    1) Server header (เชื่อถือสูง) 2) nmap -O ถ้ามี (ปานกลาง-สูง +%) 3) TTL heuristic
+    lan=True (โหมด LAN): nmap ใช้ ARP discovery (แม่นกว่า, ได้ MAC-based OS) + TTL ในวงเดียวกัน
+    เชื่อมั่นสูงขึ้น (0–1 hop → initial TTL เกือบตรงเป๊ะ)"""
     import shutil
     import subprocess
     # 1) Server header — ตั้งไว้แล้วตอน fingerprint ถ้า Apache รั่ว OS token
@@ -1671,10 +1685,12 @@ def _probe_os(host, fp, timeout):
         fp["os_confidence"] = fp.get("os_confidence") or "สูง"
         return
     # 2) nmap -O (gold standard — ต้องติดตั้ง nmap + สิทธิ์ root; ให้ผลเป็น % ความมั่นใจ)
+    #    โหมด LAN: ตัด -Pn ออกให้ nmap ใช้ ARP ping ค้นโฮสต์ (บนวงเดียวกันแม่นและได้ MAC fingerprint)
     if shutil.which("nmap"):
+        cmd = (["nmap", "-O", "--osscan-guess", "--host-timeout", "25s", host] if lan
+               else ["nmap", "-O", "--osscan-guess", "-Pn", "--host-timeout", "20s", host])
         try:
-            r = subprocess.run(["nmap", "-O", "--osscan-guess", "-Pn", "--host-timeout", "20s", host],
-                               capture_output=True, text=True, timeout=30)
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=35 if lan else 30)
             out = r.stdout or ""
             mm = (re.search(r"OS details:\s*(.+)", out) or
                   re.search(r"Aggressive OS guesses:\s*(.+)", out) or
@@ -1682,13 +1698,18 @@ def _probe_os(host, fp, timeout):
             if mm:
                 guess = mm.group(1).strip().split(",")[0].strip()
                 pm = re.search(r"\((\d+)%\)", mm.group(1))
+                # nmap อาจรายงาน MAC + ผู้ผลิตบน LAN — เก็บไว้ใช้ด้วย
+                macm = re.search(r"MAC Address:\s*([0-9A-Fa-f:]{17})\s*\(([^)]+)\)", out)
+                if macm and not fp.get("mac"):
+                    fp["mac"] = macm.group(1).lower()
+                    fp["mac_vendor"] = macm.group(2).strip()[:60]
                 fp["os"] = re.sub(r"\s*\(\d+%\)", "", guess).strip()
-                fp["os_source"] = "nmap -O"
-                fp["os_confidence"] = f"{pm.group(1)}%" if pm else "ปานกลาง"
+                fp["os_source"] = "nmap -O" + (" (LAN/ARP)" if lan else "")
+                fp["os_confidence"] = (f"{pm.group(1)}%" if pm else ("สูง (LAN)" if lan else "ปานกลาง"))
                 return
         except Exception:
             pass
-    # 3) TTL heuristic (หยาบ — spoof ได้ ให้ป้ายความเชื่อมั่นต่ำ)
+    # 3) TTL heuristic — โหมด LAN เชื่อมั่นสูงขึ้นมากเพราะ 0–1 hop (initial TTL เกือบตรงเป๊ะ)
     try:
         r = subprocess.run(["ping", "-c", "1", host], capture_output=True, text=True, timeout=4)
         tm = re.search(r"ttl[=\s]+(\d+)", r.stdout or "", re.I)
@@ -1697,9 +1718,14 @@ def _probe_os(host, fp, timeout):
             for init, name in ((64, "Linux/Unix (หรือ macOS)"), (128, "Windows"),
                                (255, "อุปกรณ์เครือข่าย/BSD/Solaris")):
                 if ttl <= init and (init - ttl) <= 32:
+                    hops = init - ttl
+                    if lan:
+                        conf = ("สูง (LAN · 0–1 hop)" if hops <= 1 else f"ปานกลาง (LAN · ~{hops} hop)")
+                    else:
+                        conf = "ต่ำ (ประมาณการ — ควรยืนยันบนเครื่อง)"
                     fp["os"] = f"{name} [TTL {ttl}]"
-                    fp["os_source"] = "TTL heuristic"
-                    fp["os_confidence"] = "ต่ำ (ประมาณการ — ควรยืนยันบนเครื่อง)"
+                    fp["os_source"] = "TTL heuristic" + (" (LAN)" if lan else "")
+                    fp["os_confidence"] = conf
                     return
     except Exception:
         pass
@@ -1737,36 +1763,37 @@ def _analyze_os_kernel(fp):
                       f"ตรวจจากภายนอกไม่ได้ ต้องเข้าไปตรวจ `uname -r` บนเครื่อง"}}
 
 
-def _probe_mac(ip, fp, opts):
+def _probe_mac(ip, fp, opts, lan=False):
     """ดึง MAC + ผู้ผลิต (OUI) — ได้เฉพาะเป้าหมายในวง LAN เดียวกัน (IP ส่วนตัว) ผ่าน ARP cache
-    เป้าหมายบนอินเทอร์เน็ตจะข้าม (MAC เป็น Layer 2 เห็นข้ามเราเตอร์ไม่ได้)"""
-    import ipaddress
+    เป้าหมายบนอินเทอร์เน็ตจะข้าม (MAC เป็น Layer 2 เห็นข้ามเราเตอร์ไม่ได้)
+    โหมด LAN: ส่ง ping ก่อนเพื่อ prime ARP cache + ค้นผู้ผลิต OUI เสมอ (ไม่ต้องรอ opt-in online)"""
     import subprocess
-    if not ip:
-        return
-    try:
-        if not ipaddress.ip_address(ip).is_private:
-            return  # นอกวง LAN → ARP ไม่ได้ MAC จริงของเป้าหมาย
-    except ValueError:
-        return
-    try:
-        r = subprocess.run(["arp", "-n", ip], capture_output=True, text=True, timeout=3)
-        mm = re.search(r"\b([0-9a-fA-F]{1,2}(?::[0-9a-fA-F]{1,2}){5})\b", r.stdout or "")
-        if not mm:
-            return
-        mac = ":".join(x.zfill(2) for x in mm.group(1).split(":")).lower()
-        fp["mac"] = mac
-        # OUI → ผู้ผลิต (ออนไลน์ macvendors.com ฟรี ไม่ต้อง key) — ใช้ร่วมกับ opt-in online
-        if opts.get("online_cve"):
-            try:
-                vr = requests.get(f"https://api.macvendors.com/{mac}", timeout=6,
-                                  headers={"User-Agent": "rmut-cert-toolkit"})
-                if vr.status_code == 200 and vr.text.strip():
-                    fp["mac_vendor"] = vr.text.strip()[:60]
-            except Exception:
-                pass
-    except Exception:
-        pass
+    if not ip or _is_private_ip(ip) is not True:
+        return  # นอกวง LAN → ARP ไม่ได้ MAC จริงของเป้าหมาย
+    # nmap (โหมด LAN) อาจเติม MAC ให้แล้ว — ถ้ายังไม่มี ค่อยอ่านจาก ARP
+    if not fp.get("mac"):
+        try:
+            if lan:  # prime ARP cache ด้วย ping 1 ครั้ง (เป้าหมายใน LAN อาจยังไม่อยู่ใน cache)
+                subprocess.run(["ping", "-c", "1", "-W", "1", ip],
+                               capture_output=True, text=True, timeout=3)
+        except Exception:
+            pass
+        try:
+            r = subprocess.run(["arp", "-n", ip], capture_output=True, text=True, timeout=3)
+            mm = re.search(r"\b([0-9a-fA-F]{1,2}(?::[0-9a-fA-F]{1,2}){5})\b", r.stdout or "")
+            if mm:
+                fp["mac"] = ":".join(x.zfill(2) for x in mm.group(1).split(":")).lower()
+        except Exception:
+            pass
+    # OUI → ผู้ผลิต (ออนไลน์ macvendors.com ฟรี ไม่ต้อง key) — โหมด LAN เปิดเสมอ, นอกนั้นตาม opt-in online
+    if fp.get("mac") and not fp.get("mac_vendor") and (lan or opts.get("online_cve")):
+        try:
+            vr = requests.get(f"https://api.macvendors.com/{fp['mac']}", timeout=6,
+                              headers={"User-Agent": "rmut-cert-toolkit"})
+            if vr.status_code == 200 and vr.text.strip():
+                fp["mac_vendor"] = vr.text.strip()[:60]
+        except Exception:
+            pass
 
 
 def _audit_security_headers(fp, base):
@@ -3277,7 +3304,20 @@ def scan_single_target(target_str, opts, idx=1, total=1):
     if base.startswith("https://"):
         _tp = urlparse(base)
         tls_cves = _probe_tls(_tp.hostname or "", _tp.port or 443, opts["timeout"], fp=fp)
-    _probe_os(urlparse(base).hostname or "", fp, opts["timeout"])
+    # ── DNS → IP + ตัดสินใจโหมด LAN (เปิดเองเมื่อเป้าหมายเป็น IP ภายใน หรือสั่ง --lan) ──
+    import socket as _sock
+    _scan_host = base.replace("https://", "").replace("http://", "").split("/")[0].split(":")[0]
+    try:
+        _ip_list = list(set(i[4][0] for i in _sock.getaddrinfo(_scan_host, None, _sock.AF_INET)))
+        _resolved_ip = _ip_list[0] if _ip_list else ""
+    except Exception:
+        _resolved_ip = ""
+    _lan = bool(opts.get("lan_mode")) or (_is_private_ip(_resolved_ip) is True)
+    fp["lan_mode"] = _lan
+    _lan and _v and print(f"    🏠 โหมด LAN: เปิด (nmap -O/ARP + MAC/OUI + TTL เชื่อมั่นสูงขึ้น)")
+    _probe_os(urlparse(base).hostname or "", fp, opts["timeout"], lan=_lan)
+    # MAC + ผู้ผลิต (เฉพาะเป้าหมายในวง LAN เดียวกัน — IP ส่วนตัว); โหมด LAN prime ARP + OUI เสมอ
+    _probe_mac(_resolved_ip, fp, opts, lan=_lan)
     _sel0 = opts.get("selected_cves")
     oskernel_cves = _analyze_os_kernel(fp) if (not _sel0 or "CVE-2026-98432" in _sel0) else {}
     fp["stack_layers"] = _stack_profile(fp, cms_info)
@@ -3360,18 +3400,6 @@ def scan_single_target(target_str, opts, idx=1, total=1):
     elif warn_cnt: _v and print(f"    🟠 พบสัญญาณเสี่ยง {warn_cnt} รายการ")
     elif unknown: _v and print(f"    ❓ ยังสรุปไม่ได้ {unknown} รายการ")
     else: _v and print(f"    🟢 ไม่พบช่องโหว่ (ตรวจ {len(all_r)} รายการ)")
-
-    # ── DNS resolution: แปลง hostname → IP address ──
-    import socket as _sock
-    _scan_host = base.replace("https://", "").replace("http://", "").split("/")[0].split(":")[0]
-    try:
-        _ip_list = list(set(i[4][0] for i in _sock.getaddrinfo(_scan_host, None, _sock.AF_INET)))
-        _resolved_ip = _ip_list[0] if _ip_list else ""
-    except Exception:
-        _resolved_ip = ""
-
-    # MAC + ผู้ผลิต (เฉพาะเป้าหมายในวง LAN เดียวกัน — IP ส่วนตัว)
-    _probe_mac(_resolved_ip, fp, opts)
 
     return {
         "target": target_str, "reachable": True, "base_url": base, "ip": _resolved_ip,
@@ -5362,41 +5390,47 @@ def _tech_inventory(fp, cms_info, findings):
 
 
 # ── ThaiCERT / NCSA : 8 กลุ่มระบบที่อาจใช้ PHP (อ้างอิงอินโฟกราฟิก "ตรวจสอบ PHP ให้ครบ 8 กลุ่มระบบ") ──
-# cap = เพดานความสามารถ "ตรวจจากภายนอกแบบไม่ล็อกอิน" (remote unauthenticated) ของเครื่องมือนี้โดยประมาณ
-#       ไม่ใช่ความแม่นของผลลัพธ์รายกรณี — บางกลุ่มต้องเข้าถึงระดับโฮสต์ (nmap -O / agent / credential) จึงจะสูงกว่านี้
+# cap     = เพดานความสามารถ "ตรวจจากภายนอกแบบไม่ล็อกอิน" (remote unauthenticated) โดยประมาณ
+# cap_lan = เพดานเมื่อสแกนจาก "เครือข่ายภายใน" (LAN mode: nmap -O/ARP + MAC/OUI + เข้าถึงอุปกรณ์ภายในได้)
+#       ทั้งคู่ไม่ใช่ความแม่นของผลลัพธ์รายกรณี — เพดานสูงสุดจริงต้องเข้าถึงระดับโฮสต์ (agent / credential)
 THAICERT_GROUPS = [
     {"no": 1, "name": "เว็บไซต์ & ระบบภายในองค์กร (CMS)",
-     "ex": "WordPress, Drupal, Joomla, Moodle, Nextcloud", "cap": 85,
+     "ex": "WordPress, Drupal, Joomla, Moodle, Nextcloud", "cap": 85, "cap_lan": 88,
      "note": "ตรวจ CMS + เวอร์ชัน + EOL + ปลอมเวอร์ชัน + ปลั๊กอิน (WP) → CVE ได้ดี; จุดอ่อน: Moodle/ปลั๊กอินเชิงลึก"},
     {"no": 2, "name": "ระบบหลังบ้านแอปมือถือ & API (Framework)",
-     "ex": "Laravel, Symfony, CodeIgniter, Yii, Slim", "cap": 50,
+     "ex": "Laravel, Symfony, CodeIgniter, Yii, Slim", "cap": 50, "cap_lan": 55,
      "note": "เห็นการมีอยู่ + debug ที่เปิดทิ้ง (Ignition/Profiler) แต่เฟรมเวิร์กไม่ค่อยรั่วเวอร์ชัน; Yii/Slim ยังไม่รองรับ"},
     {"no": 3, "name": "Hosting Control Panel",
-     "ex": "cPanel, Plesk, DirectAdmin, Webmin", "cap": 65,
+     "ex": "cPanel, Plesk, DirectAdmin, Webmin", "cap": 65, "cap_lan": 80,
      "note": "ระบุแผงควบคุมได้ แต่ cPanel/DirectAdmin ไม่เปิดเผยเวอร์ชัน → เทียบ CVE ได้เฉพาะ Plesk/Webmin บางรุ่น"},
     {"no": 4, "name": "ซอฟต์แวร์ & อุปกรณ์สำเร็จรูป (NAS/กล้อง/Network)",
-     "ex": "Synology, QNAP, Hikvision, pfSense, FortiGate, MikroTik", "cap": 60,
+     "ex": "Synology, QNAP, Hikvision, pfSense, FortiGate, MikroTik", "cap": 60, "cap_lan": 85,
      "note": "คลังสัญญาณอุปกรณ์กว้าง (NAS/CCTV/firewall/router) + MAC/OUI (เฉพาะ LAN); จุดอ่อน: firmware ส่วนใหญ่ปิด, ไม่มี ICS/SCADA"},
     {"no": 5, "name": "Container & Docker Image",
-     "ex": "Docker, Kubernetes, Traefik, Istio, Podman", "cap": 30,
+     "ex": "Docker, Kubernetes, Traefik, Istio, Podman", "cap": 30, "cap_lan": 38,
      "note": "เห็นได้แค่ชั้น ingress/reverse-proxy ที่โผล่ออกมา; ภายในคอนเทนเนอร์/อิมเมจต้องตรวจบนโฮสต์"},
     {"no": 6, "name": "Windows ที่มี PHP ติดตั้ง",
-     "ex": "IIS, XAMPP, WampServer, Laragon", "cap": 55,
+     "ex": "IIS, XAMPP, WampServer, Laragon", "cap": 55, "cap_lan": 78,
      "note": "ตรวจ IIS/Windows + XAMPP ได้; Wamp/Laragon เห็นผ่าน Apache ทั่วไปเท่านั้น"},
     {"no": 7, "name": "ระบบทดสอบ / ระบบเก่า / ระบบสำรอง",
-     "ex": "Dev/UAT/Staging, ไฟล์ backup/.git/.env, phpinfo", "cap": 55,
+     "ex": "Dev/UAT/Staging, ไฟล์ backup/.git/.env, phpinfo", "cap": 55, "cap_lan": 62,
      "note": "จับไฟล์รั่ว/แบ็กอัป/.git/.env/phpinfo/debug ได้ดี; จุดอ่อน: ไม่จำแนกว่า host เป็น staging/legacy, DR/snapshot เป็นชั้นโครงสร้าง"},
     {"no": 8, "name": "ระบบที่ผู้ให้บริการภายนอกดูแล (Hosting/Cloud)",
-     "ex": "Shared/Managed Hosting, Cloud VM, WAF/CDN", "cap": 40,
+     "ex": "Shared/Managed Hosting, Cloud VM, WAF/CDN", "cap": 40, "cap_lan": 45,
      "note": "อนุมานประเภทโฮสต์จาก WAF/CDN + control panel ได้ แต่ 'ใครดูแล/ผู้รับจ้าง' เป็นข้อมูลเชิงองค์กร ตรวจทางเทคนิคไม่ได้"},
 ]
 
 
 def _thaicert_coverage(data):
     """จัดสิ่งที่ตรวจพบในสแกนนี้เข้า 8 กลุ่มระบบของ ThaiCERT + เพดานความสามารถของเครื่องมือ
-    คืน list[dict]: {no, name, ex, cap, note, hosts(int), items(list[str]),
+    คืน list[dict]: {no, name, ex, cap, cap_remote, lan, note, hosts(int), items(list[str]),
                      detail:[{host, ip, level, items:[...], cves:[...]}]}
+    cap = เพดานที่ใช้จริง (cap_lan ถ้าสแกนจาก LAN, ไม่งั้น cap ภายนอก); lan = True เมื่อตรวจพบบริบท LAN
     detail ใช้สำหรับ drill-down ในแดชบอร์ด HTML (คลิกกลุ่ม → เห็นรายโฮสต์ที่เข้ากลุ่มนั้น)"""
+    # ตรวจบริบท LAN: มีโฮสต์ที่เปิดโหมด LAN / เป็น IP ภายใน / มี MAC (เห็นได้เฉพาะ LAN เดียวกัน)
+    lan_ctx = any(h.get("reachable") and (h.get("lan") or h.get("mac") or
+                                          _is_private_ip(h.get("ip")) is True)
+                  for h in data.get("hosts", []))
     g = {x["no"]: {**x, "_hosts": set(), "_items": set(), "_detail": {}} for x in THAICERT_GROUPS}
 
     def hit(no, host, item="", cves=(), hmeta=None):
@@ -5486,7 +5520,11 @@ def _thaicert_coverage(data):
         for host, d in sorted(gg["_detail"].items()):
             detail.append({"host": d["host"], "ip": d["ip"], "level": d["level"],
                            "items": sorted(d["items"]), "cves": sorted(d["cves"])})
-        out.append({"no": x["no"], "name": x["name"], "ex": x["ex"], "cap": x["cap"],
+        cap_remote = x["cap"]
+        cap_lan = x.get("cap_lan", cap_remote)
+        eff = cap_lan if lan_ctx else cap_remote
+        out.append({"no": x["no"], "name": x["name"], "ex": x["ex"],
+                    "cap": eff, "cap_remote": cap_remote, "cap_lan": cap_lan, "lan": lan_ctx,
                     "note": x["note"], "hosts": len(gg["_hosts"]),
                     "items": sorted(gg["_items"])[:6], "detail": detail})
     return out
@@ -5531,6 +5569,7 @@ def _extract_data(json_data):
                 "device": (f"{fp['device']} {fp.get('device_version', '')}".strip() if fp.get("device") else ""),
                 "components": fp.get("components", []) or [],
                 "mac": fp.get("mac", ""), "mac_vendor": fp.get("mac_vendor", ""),
+                "lan": fp.get("lan_mode", False),
                 "tech": _tech_inventory(fp, r.get("cms"), f),
                 "lfi": len(r.get("lfi_findings", []) or []), "max_cvss": max_cvss, "max_epss": max_epss,
                 "crit_asset": _asset_crit(lbl), "hdr": _audit_headers(fp),
@@ -7137,6 +7176,8 @@ def _build_pdf(data, charts, output_path, font):
         fp_rows.append(["อุปกรณ์/แพลตฟอร์ม", _dv])
     if fp.get("mac"):
         fp_rows.append(["MAC / ผู้ผลิต", f"{fp['mac']}" + (f" · {fp['mac_vendor']}" if fp.get("mac_vendor") else "")])
+    fp_rows.append(["โหมดสแกน", "🏠 LAN (เครือข่ายภายใน — nmap -O/ARP + MAC/OUI + TTL เชื่อมั่นสูง)"
+                    if fp.get("lan_mode") else "ภายนอก (remote unauthenticated)"])
     if fp.get("container_layers"):
         fp_rows.append(["Container / Proxy", ", ".join(fp["container_layers"])])
     if app.get("product"):
@@ -7188,13 +7229,22 @@ def _build_pdf(data, charts, output_path, font):
     _tc = _thaicert_coverage(data)
     if _tc:
         _avg = int(round(sum(x["cap"] for x in _tc) / len(_tc)))
+        _lan_on = bool(_tc[0].get("lan"))
+        _avg_remote = int(round(sum(x.get("cap_remote", x["cap"]) for x in _tc) / len(_tc)))
         story.append(P("ความครอบคลุมการตรวจสอบตามแนวทาง ThaiCERT — 8 กลุ่มระบบที่อาจใช้ PHP", h2))
-        story.append(P(
-            f"ตารางนี้จับคู่สิ่งที่ตรวจพบในสแกนครั้งนี้เข้ากับ 8 กลุ่มระบบตามอินโฟกราฟิกของ ThaiCERT/NCSA "
-            f"พร้อม<b>เพดานความสามารถในการตรวจจากภายนอกแบบไม่ล็อกอิน</b> (remote unauthenticated) ของเครื่องมือโดยประมาณ "
-            f"— ค่าเฉลี่ยทั้ง 8 กลุ่ม ≈ <b>{_avg}%</b> "
-            f"(ตัวเลขนี้คือ 'เห็นได้แค่ไหนจากนอกเครือข่าย' ไม่ใช่ความแม่นของผลลัพธ์รายกรณี; "
-            f"หลายกลุ่มจะสูงขึ้นมากหากตรวจระดับโฮสต์ด้วย nmap -O / agent / credential)", note))
+        if _lan_on:
+            story.append(P(
+                f"สแกนนี้ทำจาก<b>เครือข่ายภายใน (โหมด LAN)</b> — เปิด nmap -O/ARP, MAC/OUI และ TTL เชื่อมั่นสูงขึ้น "
+                f"ทำให้เพดานความสามารถของกลุ่มอุปกรณ์/แผงควบคุม/Windows สูงกว่าการสแกนจากภายนอก "
+                f"— ค่าเฉลี่ยทั้ง 8 กลุ่ม ≈ <b>{_avg}%</b> (ถ้าสแกนจากภายนอกจะได้ ≈ {_avg_remote}%). "
+                f"ตัวเลขนี้ไม่ใช่ความแม่นรายกรณี; เพดานสูงสุดจริงยังต้องเข้าถึงระดับโฮสต์ด้วย agent / credential", note))
+        else:
+            story.append(P(
+                f"ตารางนี้จับคู่สิ่งที่ตรวจพบในสแกนครั้งนี้เข้ากับ 8 กลุ่มระบบตามอินโฟกราฟิกของ ThaiCERT/NCSA "
+                f"พร้อม<b>เพดานความสามารถในการตรวจจากภายนอกแบบไม่ล็อกอิน</b> (remote unauthenticated) ของเครื่องมือโดยประมาณ "
+                f"— ค่าเฉลี่ยทั้ง 8 กลุ่ม ≈ <b>{_avg}%</b> "
+                f"(ตัวเลขนี้คือ 'เห็นได้แค่ไหนจากนอกเครือข่าย' ไม่ใช่ความแม่นของผลลัพธ์รายกรณี; "
+                f"หลายกลุ่มจะสูงขึ้นมากหากตรวจจาก LAN / ระดับโฮสต์ด้วย nmap -O / agent / credential)", note))
         story.append(Spacer(1, 0.15 * cm))
         # ── กราฟ: ตรวจพบตาม 8 กลุ่ม (matplotlib ถ้ามี, ไม่งั้นวาดด้วย ReportLab) ──
         story.append(P("กราฟ: จำนวนโฮสต์ที่ตรวจพบในแต่ละกลุ่ม (สีแท่ง = เพดานความสามารถตรวจ 🟢≥70 🟠≥45 🔴<45)", h2))
@@ -7888,6 +7938,7 @@ def _build_html_dashboard(data, path):
                  "stack": h.get("stack", []), "waf": h.get("waf", ""), "device": h.get("device", ""),
                  "os": h.get("os", ""), "components": h.get("components", []),
                  "mac": h.get("mac", ""), "mac_vendor": h.get("mac_vendor", ""),
+                 "lan": h.get("lan", False),
                  "tech": h.get("tech", []),
                  "lfi": h["lfi"], "score": h["risk_score"], "maxcvss": h.get("max_cvss", 0),
                  "level": h["risk_level"], **h["counts"],
@@ -9886,15 +9937,21 @@ function renderThaiCERT8(){
   const tc = (D.thaicert || []);
   if(!tc.length) return;
   const avg = Math.round(tc.reduce((a,x)=>a+x.cap,0)/tc.length);
+  const isLan = !!(tc[0] && tc[0].lan);
+  const avgRemote = Math.round(tc.reduce((a,x)=>a+(x.cap_remote!=null?x.cap_remote:x.cap),0)/tc.length);
   const cap = document.getElementById('tc8-cap');
   if(cap) cap.innerHTML = 'จับคู่สิ่งที่ตรวจพบเข้ากับ 8 กลุ่มระบบของ ThaiCERT/NCSA · ' +
-    'ความสามารถเฉลี่ยในการตรวจจากภายนอก ≈ <b style="color:var(--ink)">'+avg+'%</b> · ' +
+    (isLan
+      ? '<b style="background:#e7f5ff;color:#1864ab;padding:1px 7px;border-radius:10px;font-size:11px">🏠 โหมด LAN</b> ' +
+        'ความสามารถเฉลี่ย ≈ <b style="color:var(--ink)">'+avg+'%</b> ' +
+        '<span style="color:var(--muted)">(ภายนอกจะได้ '+avgRemote+'%)</span> · '
+      : 'ความสามารถเฉลี่ยในการตรวจจากภายนอก ≈ <b style="color:var(--ink)">'+avg+'%</b> · ') +
     '<span style="color:var(--muted)">คลิกแต่ละกลุ่มเพื่อดูรายละเอียด (drill-down)</span>';
   const thd = document.getElementById('tc8-thd');
   if(thd) thd.innerHTML = '<tr>'+
     '<th style="text-align:left;width:26px"></th>'+
     '<th style="text-align:left">กลุ่มระบบ</th>'+
-    '<th style="width:170px">ความสามารถตรวจจากภายนอก</th>'+
+    '<th style="width:180px">ความสามารถตรวจ'+(isLan?' (LAN)':' (ภายนอก)')+'</th>'+
     '<th style="text-align:left;width:220px">พบในสแกนนี้</th>'+
     '<th style="text-align:left">ขอบเขต / จุดอ่อน</th></tr>';
   const barColor = p => p>=70 ? 'var(--safe)' : (p>=45 ? 'var(--warn)' : 'var(--vuln)');
@@ -9915,6 +9972,7 @@ function renderThaiCERT8(){
         '<div style="flex:1;height:8px;background:#eef1f6;border-radius:5px;overflow:hidden">'+
           '<div style="width:'+x.cap+'%;height:100%;background:'+barColor(x.cap)+'"></div></div>'+
         '<span style="font-weight:700;color:var(--ink);font-size:12px;min-width:34px;text-align:right">'+x.cap+'%</span>'+
+        ((isLan && x.cap_lan>x.cap_remote) ? '<span style="color:var(--safe);font-size:10px;white-space:nowrap" title="โหมด LAN เพิ่มจาก '+x.cap_remote+'%">▲'+(x.cap_lan-x.cap_remote)+'</span>' : '')+
       '</div></td>'+
       '<td>'+found+'</td>'+
       '<td style="color:#555;font-size:11.5px;line-height:1.55">'+esc(x.note)+'</td></tr>';
@@ -10637,7 +10695,7 @@ def menu_scan():
 
     opts = {"depth": _SCAN_DEPTH, "max_pages": _SCAN_MAX_PAGES, "timeout": 8.0,
             "target_threads": 3, "lfi_threads": 5, "rate": 5.0,
-            "skip_lfi": False, "verbose": False, "no_verify_ssl": False, "online_cve": False}
+            "skip_lfi": False, "verbose": False, "no_verify_ssl": False, "online_cve": False, "lan_mode": False}
 
     if ask_yn("ตั้งค่าการสแกนขั้นสูง (Threads / Crawl Depth / Skip LFI)?", False):
         opts["target_threads"] = ask_int("Threads", 3, 1, 30)
@@ -10648,6 +10706,8 @@ def menu_scan():
         opts["skip_lfi"] = ask_yn("Skip LFI scan?", False)
         opts["verbose"] = ask_yn("Verbose?", False)
         opts["online_cve"] = ask_yn("ค้น CVE ออนไลน์ (CIRCL) ตามเวอร์ชันที่พบ? [ต้องต่อเน็ต]", False)
+        opts["lan_mode"] = ask_yn("บังคับโหมด LAN (nmap -O/ARP + MAC/OUI + TTL แม่นขึ้น)? "
+                                  "[เปิดเองอยู่แล้วถ้าเป้าหมายเป็น IP ภายใน]", False)
 
     # ── แสดง CVE + ขอบเขต ก่อนสแกน ──
     if not confirm_scan_scope(scope, opts):
@@ -10756,7 +10816,7 @@ def menu_rce_verify():
 
         opts = {"depth": _SCAN_DEPTH, "max_pages": _SCAN_MAX_PAGES, "timeout": 8.0,
                 "target_threads": 5, "lfi_threads": 5, "rate": 5.0,
-                "skip_lfi": False, "verbose": False, "no_verify_ssl": False, "online_cve": False}
+                "skip_lfi": False, "verbose": False, "no_verify_ssl": False, "online_cve": False, "lan_mode": False}
         print(f"\n  [*] Scanning {len(targets)} hosts ...")
         results = run_scan(targets, opts)
 
@@ -10785,7 +10845,7 @@ def menu_rce_verify():
 
         opts = {"depth": _SCAN_DEPTH, "max_pages": _SCAN_MAX_PAGES, "timeout": 8.0,
                 "target_threads": 5, "lfi_threads": 5, "rate": 5.0,
-                "skip_lfi": False, "verbose": False, "no_verify_ssl": False, "online_cve": False}
+                "skip_lfi": False, "verbose": False, "no_verify_ssl": False, "online_cve": False, "lan_mode": False}
         print(f"\n  [*] Scanning {len(targets)} subdomains ...")
         results = run_scan(targets, opts)
 
@@ -11036,7 +11096,7 @@ def menu_pipeline():
 
     opts = {"depth": _SCAN_DEPTH, "max_pages": _SCAN_MAX_PAGES, "timeout": 8.0,
             "target_threads": default_threads, "lfi_threads": 5, "rate": 5.0,
-            "skip_lfi": False, "verbose": False, "no_verify_ssl": False, "online_cve": False}
+            "skip_lfi": False, "verbose": False, "no_verify_ssl": False, "online_cve": False, "lan_mode": False}
 
     if ask_yn("ตั้งค่าการสแกนขั้นสูง (Threads / Crawl Depth / Skip LFI)?", False):
         opts["target_threads"] = ask_int("Threads", default_threads, 1, 30)
@@ -11047,6 +11107,8 @@ def menu_pipeline():
         opts["skip_lfi"] = ask_yn("Skip LFI scan?", False)
         opts["verbose"] = ask_yn("Verbose?", False)
         opts["online_cve"] = ask_yn("ค้น CVE ออนไลน์ (CIRCL) ตามเวอร์ชันที่พบ? [ต้องต่อเน็ต]", False)
+        opts["lan_mode"] = ask_yn("บังคับโหมด LAN (nmap -O/ARP + MAC/OUI + TTL แม่นขึ้น)? "
+                                  "[เปิดเองอยู่แล้วถ้าเป้าหมายเป็น IP ภายใน]", False)
 
     if not confirm_scan_scope(scope, opts):
         print(c("  ยกเลิก", C.YEL))
@@ -11243,6 +11305,9 @@ Examples:
                     help="API key สำหรับ c99.nl SubdomainFinder (เสริม — ครอบคลุมมาก)")
     ap.add_argument("--timeout", type=float, default=8.0)
     ap.add_argument("--no-verify-ssl", action="store_true")
+    ap.add_argument("--lan", action="store_true",
+                    help="LAN mode: force internal-network accuracy (nmap -O/ARP OS + MAC/OUI vendor + "
+                         "higher TTL confidence). Auto-enabled for private-IP targets.")
     args = ap.parse_args()
 
     global _OWN_TARGET, _SCAN_DEPTH, _SCAN_MAX_PAGES
@@ -11263,7 +11328,7 @@ Examples:
         opts = {"depth": _SCAN_DEPTH, "max_pages": _SCAN_MAX_PAGES, "timeout": args.timeout,
                 "target_threads": 1, "lfi_threads": 5, "rate": 5.0,
                 "skip_lfi": False, "verbose": False,
-                "no_verify_ssl": args.no_verify_ssl}
+                "no_verify_ssl": args.no_verify_ssl, "lan_mode": args.lan}
         results = run_scan([(args.target, "single")], opts)
         name = safe_name(args.target.replace("https://", "").replace("http://", "").replace("/", "_"))
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -11284,7 +11349,7 @@ Examples:
         opts = {"depth": _SCAN_DEPTH, "max_pages": _SCAN_MAX_PAGES, "timeout": args.timeout,
                 "target_threads": 3, "lfi_threads": 5, "rate": 5.0,
                 "skip_lfi": False, "verbose": False,
-                "no_verify_ssl": args.no_verify_ssl}
+                "no_verify_ssl": args.no_verify_ssl, "lan_mode": args.lan}
         results = run_scan(targets, opts)
         name = safe_name(args.cidr.replace("/", "_").replace(".", "_"))
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -11305,7 +11370,7 @@ Examples:
         opts = {"depth": _SCAN_DEPTH, "max_pages": _SCAN_MAX_PAGES, "timeout": args.timeout,
                 "target_threads": 5, "lfi_threads": 5, "rate": 5.0,
                 "skip_lfi": False, "verbose": False,
-                "no_verify_ssl": args.no_verify_ssl}
+                "no_verify_ssl": args.no_verify_ssl, "lan_mode": args.lan}
         results = run_scan(targets, opts)
         name = safe_name(args.wildcard.replace(".", "_"))
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -11332,7 +11397,7 @@ Examples:
         opts = {"depth": _SCAN_DEPTH, "max_pages": _SCAN_MAX_PAGES, "timeout": args.timeout,
                 "target_threads": 5, "lfi_threads": 5, "rate": 5.0,
                 "skip_lfi": False, "verbose": False,
-                "no_verify_ssl": args.no_verify_ssl}
+                "no_verify_ssl": args.no_verify_ssl, "lan_mode": args.lan}
         results = run_scan(targets, opts)
         name = safe_name(Path(args.listfile).stem)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -11356,7 +11421,7 @@ Examples:
         opts = {"depth": _SCAN_DEPTH, "max_pages": _SCAN_MAX_PAGES, "timeout": args.timeout,
                 "target_threads": 1, "lfi_threads": 5, "rate": 5.0,
                 "skip_lfi": False, "verbose": False,
-                "no_verify_ssl": args.no_verify_ssl}
+                "no_verify_ssl": args.no_verify_ssl, "lan_mode": args.lan}
         results = run_scan([(target, "single")], opts)
         r = results[0]
 

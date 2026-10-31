@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- LAN mode for internal-network scanning (`--lan`, interactive prompt, and
+  auto-enabled for private-IP targets). Raises accuracy on the LAN: `nmap -O`
+  uses ARP discovery (and harvests MAC + vendor), MAC/OUI vendor lookup runs
+  without the online-CVE opt-in (ARP cache primed with a ping), and the TTL
+  heuristic is labelled high-confidence at 0–1 hop. The ThaiCERT 8-group
+  coverage now reports a LAN capability ceiling (`cap_lan`) alongside the
+  remote one — groups 3/4/6 rise the most (avg ~55% remote → ~66% on LAN) —
+  shown with a 🏠 badge and per-group uplift in the HTML and PDF.
 - CVE-2026-98432 — Linux kernel IPv4 TCP use-after-free (CVSS 9.8). Tied to
   the OS fingerprint: reported as "unknown — verify on host" for Linux
   (kernel patch state can't be confirmed over HTTP) and "n/a" for Windows,
