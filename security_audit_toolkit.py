@@ -5258,6 +5258,64 @@ def _os_display(fp):
     return txt or ""
 
 
+def _tech_inventory(fp, cms_info, findings):
+    """รวมเทคโนโลยีที่ตรวจพบทุกชั้นเป็นตารางเดียว: [tech, version, status, #CVE, maxSeverity]
+    status บอก EOL/ปลอม/ตรวจสอบ; #CVE/severity นับจาก findings ที่กระทบจริง"""
+    app = (cms_info or {}).get("app") or {}
+    impact = [f for f in findings if _bucket_of(f.get("status")) in ("vulnerable", "warning")]
+
+    def _match(cats=(), kw=()):
+        fs = [f for f in impact if (f.get("category") in cats) or
+              any(k and k.lower() in (f.get("name", "") + " " + f.get("reason", "")).lower() for k in kw)]
+        if not fs:
+            return 0, ""
+        sev = max((f.get("severity", "") for f in fs),
+                  key=lambda s: _SEV_WEIGHT.get((s or "").split("(")[0].strip(), 0.0))
+        return len(fs), sev
+
+    rows = []
+
+    def add(tech, ver, status, cats=(), kw=()):
+        if not ver:
+            return
+        n, sev = _match(cats, kw)
+        rows.append([tech, ver, status, (str(n) if n else "—"), (sev if n else "—")])
+
+    if _os_display(fp):
+        add("ระบบปฏิบัติการ (OS)", _os_display(fp), "—")
+    if fp.get("server_family", "Unknown") != "Unknown":
+        add(fp["server_family"], fp.get("server_version", "") or "(เวอร์ชันไม่เปิดเผย)", "—",
+            cats=("NGINX",), kw=(fp["server_family"],))
+    for k, v in (fp.get("modules") or {}).items():
+        add(k, v, "—", kw=(k,))
+    if fp.get("php_versions"):
+        eol = any(f.get("cve") == "UNSUPPORTED-PHP" for f in findings)
+        add("PHP", ", ".join(fp["php_versions"]),
+            ("🔴 EOL — หยุดรับแพตช์" if eol else "ตรวจรุ่นล่าสุด"), cats=("PHP",))
+    if fp.get("nodejs_versions"):
+        add("Node.js", ", ".join(fp["nodejs_versions"]), "—", cats=("Node.js",))
+    if app.get("product"):
+        appf = next((f for f in findings if f.get("cve") == "APP-" + app["product"]), None)
+        st = "ตรวจรุ่นล่าสุด"
+        if appf:
+            nm = appf.get("name", "")
+            if "ปลอม" in nm:
+                st = "⚠️ เวอร์ชันอาจถูกปลอม"
+            elif "เก่า" in nm or appf.get("status") == "vulnerable-version":
+                st = "🔴 EOL/รุ่นเก่า"
+        add(app["product"], app.get("version_str", "") or "(ไม่ทราบ)", st,
+            cats=("App",), kw=(app["product"],))
+    if fp.get("device"):
+        add(fp["device"], fp.get("device_version", "") or "(firmware ไม่เปิดเผย)",
+            "ตรวจ firmware", cats=("Device",), kw=(fp["device"],))
+    for c in (fp.get("components") or []):
+        add(f"{c['name']} · {c['type']}", c.get("version", "") or "(ไม่ทราบเวอร์ชัน)", "—",
+            cats=("Component",), kw=(c["name"],))
+    if fp.get("composer_packages"):
+        add("แพ็กเกจ composer", f"{len(fp['composer_packages'])} แพ็กเกจ", "เทียบ CVE รายแพ็กเกจ")
+    return rows
+
+
 def _extract_data(json_data):
     scan_date = json_data.get("scan_time", datetime.now().isoformat())
 
@@ -5297,6 +5355,7 @@ def _extract_data(json_data):
                 "device": (f"{fp['device']} {fp.get('device_version', '')}".strip() if fp.get("device") else ""),
                 "components": fp.get("components", []) or [],
                 "mac": fp.get("mac", ""), "mac_vendor": fp.get("mac_vendor", ""),
+                "tech": _tech_inventory(fp, r.get("cms"), f),
                 "lfi": len(r.get("lfi_findings", []) or []), "max_cvss": max_cvss, "max_epss": max_epss,
                 "crit_asset": _asset_crit(lbl), "hdr": _audit_headers(fp),
                 "tls_version": fp.get("tls_version"), "cert_days_left": fp.get("cert_days_left"),
@@ -6903,6 +6962,24 @@ def _build_pdf(data, charts, output_path, font):
                            ("LEFTPADDING", (0, 0), (-1, -1), 8)]))
     story.append(t)
     story.append(Spacer(1, 0.4 * cm))
+
+    # ── ตารางสรุปเทคโนโลยี + EOL/CVE ──
+    _tech = _tech_inventory(fp, data.get("cms"), data["all_results"])
+    if _tech:
+        story.append(P("สรุปเทคโนโลยีที่ตรวจพบ + EOL / CVE" + (" (ตัวอย่างจากโฮสต์แรก)" if multi else ""), h2))
+        _thead = [P(x, cellwh) for x in ["เทคโนโลยี", "เวอร์ชัน", "สถานะ", "CVE", "รุนแรงสุด"]]
+        _trows = [_thead] + [[P(str(r[0]), cell), P(str(r[1]), cell), P(str(r[2]), cell),
+                              P(str(r[3]), cell), P(str(r[4]), cell)] for r in _tech]
+        _tt = Table(_trows, colWidths=[4.5 * cm, 3.4 * cm, 4 * cm, 1.4 * cm, 2.7 * cm])
+        _tt.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), RMUT_BLUE),
+            ("LINEBELOW", (0, 0), (-1, -1), 0.4, colors.HexColor("#d9dce6")),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ("LEFTPADDING", (0, 0), (-1, -1), 6)]))
+        story.append(_tt)
+        story.append(Spacer(1, 0.4 * cm))
+
     story.append(P("ขอบเขตและข้อจำกัดของการสแกน", h2))
     for lim in ["การตรวจสอบนี้ทำจากภายนอกเครือข่าย (เสมือนแฮกเกอร์มือใหม่) — ไม่สามารถยืนยันเวอร์ชันซอฟต์แวร์ที่รันจริงบนเซิร์ฟเวอร์ได้ทุกกรณี",
                 "การตรวจค่าคอนฟิกเซิร์ฟเวอร์ละเอียด (เช่น การตั้งค่า SSI, AIO, alias) ต้องเข้าไปตรวจบนเครื่องจริงโดยแอดมิน",
@@ -7505,6 +7582,7 @@ def _build_html_dashboard(data, path):
                  "stack": h.get("stack", []), "waf": h.get("waf", ""), "device": h.get("device", ""),
                  "os": h.get("os", ""), "components": h.get("components", []),
                  "mac": h.get("mac", ""), "mac_vendor": h.get("mac_vendor", ""),
+                 "tech": h.get("tech", []),
                  "lfi": h["lfi"], "score": h["risk_score"], "maxcvss": h.get("max_cvss", 0),
                  "level": h["risk_level"], **h["counts"],
                  "hdr": h.get("hdr", {}),
@@ -8765,6 +8843,28 @@ function openDr(hostname, forceAll){
         `</div>`;
     }
     html += `</div>`;
+  }
+
+  // ตารางสรุปเทคโนโลยี + EOL/CVE (รวมทุกชั้น)
+  if(h.tech && h.tech.length){
+    const sevCol2 = {Critical:'#c0392b',High:'#d35400','Medium-High':'#d35400',Medium:'#e67e22',Low:'#2980b9',Info:'#6b7280'};
+    html += `<div class="dr-sec"><h4>สรุปเทคโนโลยี + EOL / CVE</h4>
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+      <thead><tr style="background:#f0f3fb;color:var(--ink)">
+        <th style="text-align:left;padding:6px 8px">เทคโนโลยี</th>
+        <th style="text-align:left;padding:6px 8px">เวอร์ชัน</th>
+        <th style="text-align:left;padding:6px 8px">สถานะ</th>
+        <th style="text-align:center;padding:6px 8px">CVE</th>
+        <th style="text-align:left;padding:6px 8px">รุนแรงสุด</th>
+      </tr></thead><tbody>` +
+      h.tech.map(t => `<tr style="border-bottom:1px solid #eef0f5">
+        <td style="padding:6px 8px;font-weight:600">${esc(t[0])}</td>
+        <td style="padding:6px 8px;font-family:monospace">${esc(t[1])}</td>
+        <td style="padding:6px 8px">${esc(t[2])}</td>
+        <td style="padding:6px 8px;text-align:center;font-weight:700;color:${t[3]!=='—'?'var(--vuln)':'var(--muted)'}">${esc(t[3])}</td>
+        <td style="padding:6px 8px;font-weight:600;color:${sevCol2[t[4]]||'var(--muted)'}">${esc(t[4])}</td>
+      </tr>`).join('') +
+      `</tbody></table></div>`;
   }
 
   // Filter Notification Banner inside Drawer
