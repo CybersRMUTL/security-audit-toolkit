@@ -10658,6 +10658,9 @@ def menu_scan():
     print(f"  {c('📦 Output ที่จะได้จากเมนูนี้:', C.GRN)} ไฟล์ JSON บันทึกผลสแกน เช่น {c('scan_<mode>_<target>_<timestamp>.json', C.B)}")
     print(f"  {c('   (ประกอบด้วยข้อมูล Server/PHP Fingerprint, ช่องโหว่ 14 CVEs, จุดเสี่ยง LFI และ Session)', C.D)}\n")
 
+    # ── ภาพใหญ่ก่อน: เลือกโหมดการสแกน (จากตำแหน่งใด) แล้วค่อยโฟกัสที่เป้าหมาย ──
+    _scan_mode = ask_scan_mode()
+
     mode = ask_choice("เลือกรูปแบบเป้าหมายที่ต้องการสแกน:", [
         ("single", "Single Host (เป้าหมายเดี่ยว)",
          "ระบุ IP, Domain หรือ URL เดี่ยวเพื่อสแกนเชิงลึก",
@@ -10723,8 +10726,7 @@ def menu_scan():
             "target_threads": 3, "lfi_threads": 5, "rate": 5.0,
             "skip_lfi": False, "verbose": False, "no_verify_ssl": False, "online_cve": False, "lan_mode": False}
 
-    # ── เลือกโหมดการสแกนตั้งแต่ต้น: อัตโนมัติ / ภายนอก / LAN ──
-    opts["scan_mode"] = ask_scan_mode()
+    opts["scan_mode"] = _scan_mode
 
     if ask_yn("ตั้งค่าการสแกนขั้นสูง (Threads / Crawl Depth / Skip LFI)?", False):
         opts["target_threads"] = ask_int("Threads", 3, 1, 30)
@@ -11047,6 +11049,8 @@ def menu_pipeline():
     print(f"     5. {c('reports/charts/*.png', C.B)}                      — กราฟสถิติประกอบรายงาน 4 รูป\n")
 
     section("STEP 1: Scan")
+    # ── ภาพใหญ่ก่อน: เลือกโหมดการสแกน แล้วค่อยโฟกัสที่เป้าหมาย ──
+    _scan_mode = ask_scan_mode()
     mode = ask_choice("เลือกรูปแบบเป้าหมายสำหรับทำ Full Pipeline:", [
         ("single", "Single Host (เป้าหมายเดี่ยว)",
          "ระบุ IP, Domain หรือ URL เดี่ยวเพื่อสแกน → พิสูจน์ RCE → ออกรายงาน",
@@ -11125,8 +11129,7 @@ def menu_pipeline():
             "target_threads": default_threads, "lfi_threads": 5, "rate": 5.0,
             "skip_lfi": False, "verbose": False, "no_verify_ssl": False, "online_cve": False, "lan_mode": False}
 
-    # ── เลือกโหมดการสแกนตั้งแต่ต้น: อัตโนมัติ / ภายนอก / LAN ──
-    opts["scan_mode"] = ask_scan_mode()
+    opts["scan_mode"] = _scan_mode
 
     if ask_yn("ตั้งค่าการสแกนขั้นสูง (Threads / Crawl Depth / Skip LFI)?", False):
         opts["target_threads"] = ask_int("Threads", default_threads, 1, 30)
