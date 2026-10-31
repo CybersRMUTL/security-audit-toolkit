@@ -8539,9 +8539,10 @@ def browse_file(title="เลือกไฟล์ JSON ผลการสแก
         filetypes = [(f"{_ext_label} files", _pat), ("All files", "*.*")]
     else:
         filetypes = [("All files", "*.*")]
-    # บน macOS ลอง osascript ก่อน; ถ้าใช้ไม่ได้ (None) จึง fallback ไป tkinter
+    # macOS: ใช้ osascript เท่านั้น (ไม่แตะ tkinter เพราะเป็นต้นเหตุหน้าต่างลอย/แย่งโฟกัส)
+    # ถ้า osascript ไม่ได้ผล → ตกไปใช้ CLI browser ด้านล่าง. OS อื่นจึงใช้ tkinter
     selected = _osascript_choose("file", title, start_dir, _exts)
-    if selected is None:
+    if selected is None and sys.platform != "darwin":
         selected = _tk_choose("file", title, start_dir, filetypes)
     if selected and Path(selected).exists():
         print(f"  {c('✅ เลือกไฟล์:', C.GRN)} {selected}")
@@ -8634,9 +8635,9 @@ def browse_directory(title="เลือกโฟลเดอร์ Evidence (�
     if mode == "manual":
         return ask("กรอก Path โฟลเดอร์", default="")
 
-    # GUI directory dialog — macOS ใช้ osascript ก่อน, อื่นๆ ใช้ tkinter
+    # GUI directory dialog — macOS ใช้ osascript เท่านั้น (ไม่แตะ tkinter), OS อื่นใช้ tkinter
     selected = _osascript_choose("folder", title, start_dir)
-    if selected is None:
+    if selected is None and sys.platform != "darwin":
         selected = _tk_choose("folder", title, start_dir)
     if selected and Path(selected).is_dir():
         print(f"  {c('✅ เลือกโฟลเดอร์:', C.GRN)} {selected}")
