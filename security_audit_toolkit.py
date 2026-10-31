@@ -8466,8 +8466,61 @@ def ask_choice(prompt, choices, default=None):
         print(c("    ❌ ไม่ถูกต้อง", C.RED))
 
 
+def _osascript_choose(kind, title, start_dir, exts=None):
+    """เปิด dialog เนทีฟของ macOS ผ่าน osascript (จัดการโฟกัสถูกต้อง ไม่แย่งหน้าต่างอื่น)
+    kind: 'file' หรือ 'folder' — คืนค่า: path (สำเร็จ), "" (ผู้ใช้กดยกเลิก), None (ใช้ไม่ได้/ผิดพลาด)"""
+    if sys.platform != "darwin":
+        return None
+    try:
+        import subprocess
+        safe_title = title.replace("\\", "\\\\").replace('"', '\\"')
+        loc = os.path.abspath(start_dir)
+        if kind == "folder":
+            script = f'POSIX path of (choose folder with prompt "{safe_title}" default location (POSIX file "{loc}"))'
+        else:
+            type_clause = ""
+            if exts:
+                quoted = ", ".join('"' + e.lstrip(".") + '"' for e in exts)
+                type_clause = f" of type {{{quoted}}}"
+            script = f'POSIX path of (choose file with prompt "{safe_title}" default location (POSIX file "{loc}"){type_clause}'
+        res = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=120)
+        if res.returncode == 0 and res.stdout.strip():
+            return res.stdout.strip()
+        # returncode != 0 : แยกกรณี "ผู้ใช้กดยกเลิก" (-128) ออกจากข้อผิดพลาดจริง
+        if "-128" in res.stderr or "−128" in res.stderr or "User canceled" in res.stderr:
+            return ""
+        return None
+    except Exception:
+        return None
+
+
+def _tk_choose(kind, title, start_dir, filetypes=None):
+    """เปิด dialog ด้วย tkinter แบบไม่แย่งโฟกัสค้าง (ยกขึ้นหน้าชั่วคราวแล้วปล่อยคืน)
+    kind: 'file' หรือ 'folder' — คืนค่า path หรือ "" (ยกเลิก/ใช้ไม่ได้)"""
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+        root = tk.Tk()
+        root.withdraw()
+        root.update_idletasks()
+        # ยกหน้าต่างขึ้นหน้าแค่ชั่วคราว แล้วยกเลิก topmost ทันที เพื่อไม่ให้ค้างทับแอปอื่น
+        root.attributes("-topmost", True)
+        root.after(200, lambda: root.attributes("-topmost", False))
+        if kind == "folder":
+            selected = filedialog.askdirectory(parent=root, initialdir=os.path.abspath(start_dir), title=title)
+        else:
+            selected = filedialog.askopenfilename(
+                parent=root, initialdir=os.path.abspath(start_dir), title=title,
+                filetypes=filetypes or [("All files", "*.*")]
+            )
+        root.destroy()
+        return selected or ""
+    except Exception:
+        return ""
+
+
 def browse_file(title="เลือกไฟล์ JSON ผลการสแกน", ext=".json", start_dir="."):
-    """เรียกหน้าต่าง GUI (tkinter/macOS) หรือ interactive CLI browser เพื่อเลือกไฟล์
+    """เรียกหน้าต่าง GUI (macOS: osascript ก่อน, อื่นๆ: tkinter) หรือ interactive CLI browser เพื่อเลือกไฟล์
     ext รับได้ทั้ง str เดี่ยว (เช่น '.json') หรือ tuple/list หลายนามสกุล (เช่น ('.csv','.txt'))"""
     # รองรับหลายนามสกุล: normalize เป็นรายการ _exts
     if isinstance(ext, (list, tuple)):
@@ -8479,42 +8532,20 @@ def browse_file(title="เลือกไฟล์ JSON ผลการสแก
     def _match_ext(p):
         return (not _exts) or (p.suffix.lower() in _exts)
 
-    # 1. ลองใช้ GUI File Dialog ก่อน (tkinter หรือ osascript บน macOS)
+    # 1. GUI File Dialog — macOS ใช้ osascript ก่อน (จัดการโฟกัสถูกต้อง), อื่นๆ ใช้ tkinter
     print(f"\n  {c('🔍 กำลังเปิดหน้าต่างเลือกไฟล์ (หรือเลือกจากรายการด้านล่าง)...', C.CYN)}")
-    try:
-        import tkinter as tk
-        from tkinter import filedialog
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes("-topmost", True)
-        if _exts:
-            _pat = " ".join(f"*{e}" for e in _exts)
-            filetypes = [(f"{_ext_label} files", _pat), ("All files", "*.*")]
-        else:
-            filetypes = [("All files", "*.*")]
-        selected = filedialog.askopenfilename(
-            initialdir=os.path.abspath(start_dir),
-            title=title,
-            filetypes=filetypes
-        )
-        root.destroy()
-        if selected and Path(selected).exists():
-            print(f"  {c('✅ เลือกไฟล์:', C.GRN)} {selected}")
-            return selected
-    except Exception:
-        # Fallback สำหรับ macOS หาก tkinter มีปัญหาแต่มี osascript
-        if sys.platform == "darwin":
-            try:
-                import subprocess
-                script = f'POSIX path of (choose file with prompt "{title}" default location (POSIX file "{os.path.abspath(start_dir)}"))'
-                res = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=60)
-                if res.returncode == 0 and res.stdout.strip():
-                    selected = res.stdout.strip()
-                    if Path(selected).exists():
-                        print(f"  {c('✅ เลือกไฟล์:', C.GRN)} {selected}")
-                        return selected
-            except Exception:
-                pass
+    if _exts:
+        _pat = " ".join(f"*{e}" for e in _exts)
+        filetypes = [(f"{_ext_label} files", _pat), ("All files", "*.*")]
+    else:
+        filetypes = [("All files", "*.*")]
+    # บน macOS ลอง osascript ก่อน; ถ้าใช้ไม่ได้ (None) จึง fallback ไป tkinter
+    selected = _osascript_choose("file", title, start_dir, _exts)
+    if selected is None:
+        selected = _tk_choose("file", title, start_dir, filetypes)
+    if selected and Path(selected).exists():
+        print(f"  {c('✅ เลือกไฟล์:', C.GRN)} {selected}")
+        return selected
 
     # 2. Interactive Terminal File Browser (กรณีไม่ใช้ GUI หรือกดยกเลิก GUI)
     cur_dir = Path(start_dir).resolve()
@@ -8603,31 +8634,13 @@ def browse_directory(title="เลือกโฟลเดอร์ Evidence (�
     if mode == "manual":
         return ask("กรอก Path โฟลเดอร์", default="")
 
-    # ลองเปิด GUI directory dialog
-    try:
-        import tkinter as tk
-        from tkinter import filedialog
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes("-topmost", True)
-        selected = filedialog.askdirectory(initialdir=os.path.abspath(start_dir), title=title)
-        root.destroy()
-        if selected and Path(selected).is_dir():
-            print(f"  {c('✅ เลือกโฟลเดอร์:', C.GRN)} {selected}")
-            return selected
-    except Exception:
-        if sys.platform == "darwin":
-            try:
-                import subprocess
-                script = f'POSIX path of (choose folder with prompt "{title}" default location (POSIX file "{os.path.abspath(start_dir)}"))'
-                res = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=60)
-                if res.returncode == 0 and res.stdout.strip():
-                    selected = res.stdout.strip()
-                    if Path(selected).is_dir():
-                        print(f"  {c('✅ เลือกโฟลเดอร์:', C.GRN)} {selected}")
-                        return selected
-            except Exception:
-                pass
+    # GUI directory dialog — macOS ใช้ osascript ก่อน, อื่นๆ ใช้ tkinter
+    selected = _osascript_choose("folder", title, start_dir)
+    if selected is None:
+        selected = _tk_choose("folder", title, start_dir)
+    if selected and Path(selected).is_dir():
+        print(f"  {c('✅ เลือกโฟลเดอร์:', C.GRN)} {selected}")
+        return selected
 
     # Fallback CLI directory picker
     cur_dir = Path(start_dir).resolve()
