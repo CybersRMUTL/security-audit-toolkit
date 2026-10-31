@@ -944,7 +944,8 @@ def _fingerprint(session, base, prefix, timeout, verbose=False):
           "nodejs_frameworks": [], "cdn_proxy": None, "headers": {},
           "os_version": "", "modules": {}, "device": None, "device_version": "",
           "device_category": "", "container_layers": [], "components": [],
-          "composer_packages": [], "waf": None}
+          "composer_packages": [], "waf": None,
+          "os_source": "", "os_confidence": "", "mac": "", "mac_vendor": ""}
     node_vers, node_fws = set(), set()
     php_ev = set()
 
@@ -1650,6 +1651,83 @@ def _probe_tls(host, port, timeout, fp=None):
         except Exception:
             pass  # เชื่อมต่อไม่ได้ = ไม่รองรับ (ดี) หรือ client ทำ TLS เก่าไม่ได้
     return out
+
+
+def _probe_os(host, fp, timeout):
+    """เสริมการระบุ OS แบบหลายแหล่ง + ติดป้ายที่มา/ความเชื่อมั่น (ไม่รับประกันถูก 100%):
+    1) Server header (เชื่อถือสูง) 2) nmap -O ถ้ามี (ปานกลาง-สูง +%) 3) TTL heuristic (ต่ำ)"""
+    import shutil
+    import subprocess
+    # 1) Server header — ตั้งไว้แล้วตอน fingerprint ถ้า Apache รั่ว OS token
+    if fp.get("os_version"):
+        fp["os_source"] = fp.get("os_source") or "Server header"
+        fp["os_confidence"] = fp.get("os_confidence") or "สูง"
+        return
+    # 2) nmap -O (gold standard — ต้องติดตั้ง nmap + สิทธิ์ root; ให้ผลเป็น % ความมั่นใจ)
+    if shutil.which("nmap"):
+        try:
+            r = subprocess.run(["nmap", "-O", "--osscan-guess", "-Pn", "--host-timeout", "20s", host],
+                               capture_output=True, text=True, timeout=30)
+            out = r.stdout or ""
+            mm = (re.search(r"OS details:\s*(.+)", out) or
+                  re.search(r"Aggressive OS guesses:\s*(.+)", out) or
+                  re.search(r"Running:\s*(.+)", out))
+            if mm:
+                guess = mm.group(1).strip().split(",")[0].strip()
+                pm = re.search(r"\((\d+)%\)", mm.group(1))
+                fp["os"] = re.sub(r"\s*\(\d+%\)", "", guess).strip()
+                fp["os_source"] = "nmap -O"
+                fp["os_confidence"] = f"{pm.group(1)}%" if pm else "ปานกลาง"
+                return
+        except Exception:
+            pass
+    # 3) TTL heuristic (หยาบ — spoof ได้ ให้ป้ายความเชื่อมั่นต่ำ)
+    try:
+        r = subprocess.run(["ping", "-c", "1", host], capture_output=True, text=True, timeout=4)
+        tm = re.search(r"ttl[=\s]+(\d+)", r.stdout or "", re.I)
+        if tm:
+            ttl = int(tm.group(1))
+            for init, name in ((64, "Linux/Unix (หรือ macOS)"), (128, "Windows"),
+                               (255, "อุปกรณ์เครือข่าย/BSD/Solaris")):
+                if ttl <= init and (init - ttl) <= 32:
+                    fp["os"] = f"{name} [TTL {ttl}]"
+                    fp["os_source"] = "TTL heuristic"
+                    fp["os_confidence"] = "ต่ำ (ประมาณการ — ควรยืนยันบนเครื่อง)"
+                    return
+    except Exception:
+        pass
+
+
+def _probe_mac(ip, fp, opts):
+    """ดึง MAC + ผู้ผลิต (OUI) — ได้เฉพาะเป้าหมายในวง LAN เดียวกัน (IP ส่วนตัว) ผ่าน ARP cache
+    เป้าหมายบนอินเทอร์เน็ตจะข้าม (MAC เป็น Layer 2 เห็นข้ามเราเตอร์ไม่ได้)"""
+    import ipaddress
+    import subprocess
+    if not ip:
+        return
+    try:
+        if not ipaddress.ip_address(ip).is_private:
+            return  # นอกวง LAN → ARP ไม่ได้ MAC จริงของเป้าหมาย
+    except ValueError:
+        return
+    try:
+        r = subprocess.run(["arp", "-n", ip], capture_output=True, text=True, timeout=3)
+        mm = re.search(r"\b([0-9a-fA-F]{1,2}(?::[0-9a-fA-F]{1,2}){5})\b", r.stdout or "")
+        if not mm:
+            return
+        mac = ":".join(x.zfill(2) for x in mm.group(1).split(":")).lower()
+        fp["mac"] = mac
+        # OUI → ผู้ผลิต (ออนไลน์ macvendors.com ฟรี ไม่ต้อง key) — ใช้ร่วมกับ opt-in online
+        if opts.get("online_cve"):
+            try:
+                vr = requests.get(f"https://api.macvendors.com/{mac}", timeout=6,
+                                  headers={"User-Agent": "rmut-cert-toolkit"})
+                if vr.status_code == 200 and vr.text.strip():
+                    fp["mac_vendor"] = vr.text.strip()[:60]
+            except Exception:
+                pass
+    except Exception:
+        pass
 
 
 def _audit_security_headers(fp, base):
@@ -3160,6 +3238,7 @@ def scan_single_target(target_str, opts, idx=1, total=1):
     if base.startswith("https://"):
         _tp = urlparse(base)
         tls_cves = _probe_tls(_tp.hostname or "", _tp.port or 443, opts["timeout"], fp=fp)
+    _probe_os(urlparse(base).hostname or "", fp, opts["timeout"])
     fp["stack_layers"] = _stack_profile(fp, cms_info)
     _v and fp["stack_layers"] and print(f"    Stack: {' → '.join(fp['stack_layers'])}")
     online_cves = _online_cve_scan(fp, cms_info, opts)
@@ -3248,6 +3327,9 @@ def scan_single_target(target_str, opts, idx=1, total=1):
         _resolved_ip = _ip_list[0] if _ip_list else ""
     except Exception:
         _resolved_ip = ""
+
+    # MAC + ผู้ผลิต (เฉพาะเป้าหมายในวง LAN เดียวกัน — IP ส่วนตัว)
+    _probe_mac(_resolved_ip, fp, opts)
 
     return {
         "target": target_str, "reachable": True, "base_url": base, "ip": _resolved_ip,
@@ -5168,6 +5250,14 @@ _RISK_ORDER = {"critical": 0, "warning": 1, "unknown": 2, "safe": 3, "n/a": 4}
 _BUCKET_ORDER = {"vulnerable": 0, "warning": 1, "unknown": 2, "safe": 3}
 
 
+def _os_display(fp):
+    """ข้อความ OS พร้อมที่มา/ความเชื่อมั่น (เช่น 'Windows [TTL 115] (TTL heuristic · ต่ำ)')"""
+    txt = fp.get("os_version") or (fp.get("os") if fp.get("os") not in (None, "Unknown") else "")
+    if txt and fp.get("os_source"):
+        txt += f" ({fp['os_source']} · {fp.get('os_confidence', '')})"
+    return txt or ""
+
+
 def _extract_data(json_data):
     scan_date = json_data.get("scan_time", datetime.now().isoformat())
 
@@ -5201,11 +5291,12 @@ def _extract_data(json_data):
                 "server": (f"{fp.get('server_family', '?')} {fp.get('server_version', '')}".strip() or "?"),
                 "php": ", ".join(fp.get("php_versions", [])) or "-",
                 "cms": _cms_disp,
-                "os": (fp.get("os_version") or (fp.get("os") if fp.get("os") not in (None, "Unknown") else "")),
+                "os": _os_display(fp),
                 "stack": fp.get("stack_layers", []) or [],
                 "waf": fp.get("waf") or "",
                 "device": (f"{fp['device']} {fp.get('device_version', '')}".strip() if fp.get("device") else ""),
                 "components": fp.get("components", []) or [],
+                "mac": fp.get("mac", ""), "mac_vendor": fp.get("mac_vendor", ""),
                 "lfi": len(r.get("lfi_findings", []) or []), "max_cvss": max_cvss, "max_epss": max_epss,
                 "crit_asset": _asset_crit(lbl), "hdr": _audit_headers(fp),
                 "tls_version": fp.get("tls_version"), "cert_days_left": fp.get("cert_days_left"),
@@ -6768,7 +6859,7 @@ def _build_pdf(data, charts, output_path, font):
     fp_rows = []
     if fp.get("stack_layers"):
         fp_rows.append(["โปรไฟล์สแตก (ชั้น)", "  →  ".join(fp["stack_layers"])])
-    fp_rows += [["ระบบปฏิบัติการ", fp.get("os_version") or fp.get("os", "ไม่ทราบ")],
+    fp_rows += [["ระบบปฏิบัติการ", _os_display(fp) or "ไม่ทราบ"],
                 ["เว็บเซิร์ฟเวอร์", f"{fp.get('server_family', 'ไม่ทราบ')} {fp.get('server_version', '')}".strip()],
                 ["SAPI", fp.get("sapi", "ไม่ทราบ")],
                 ["เวอร์ชัน PHP", ", ".join(fp.get("php_versions", [])) or "ไม่พบ"]]
@@ -6781,6 +6872,8 @@ def _build_pdf(data, charts, output_path, font):
         if fp.get("device_category"):
             _dv += f" ({fp['device_category']})"
         fp_rows.append(["อุปกรณ์/แพลตฟอร์ม", _dv])
+    if fp.get("mac"):
+        fp_rows.append(["MAC / ผู้ผลิต", f"{fp['mac']}" + (f" · {fp['mac_vendor']}" if fp.get("mac_vendor") else "")])
     if fp.get("container_layers"):
         fp_rows.append(["Container / Proxy", ", ".join(fp["container_layers"])])
     if app.get("product"):
@@ -7411,6 +7504,7 @@ def _build_html_dashboard(data, path):
                  "server": h["server"] or "", "php": h["php"] or "", "cms": h["cms"] or "",
                  "stack": h.get("stack", []), "waf": h.get("waf", ""), "device": h.get("device", ""),
                  "os": h.get("os", ""), "components": h.get("components", []),
+                 "mac": h.get("mac", ""), "mac_vendor": h.get("mac_vendor", ""),
                  "lfi": h["lfi"], "score": h["risk_score"], "maxcvss": h.get("max_cvss", 0),
                  "level": h["risk_level"], **h["counts"],
                  "hdr": h.get("hdr", {}),
@@ -8653,6 +8747,7 @@ function openDr(hostname, forceAll){
     <div class="dr-info-cell"><div class="lab">CMS / App</div><div class="val">${esc(h.cms)||'—'}</div></div>
     <div class="dr-info-cell"><div class="lab">WAF / Proxy</div><div class="val">${esc(h.waf)||'—'}</div></div>
     ${h.device ? `<div class="dr-info-cell"><div class="lab">อุปกรณ์/แพลตฟอร์ม</div><div class="val">${esc(h.device)}</div></div>` : ''}
+    ${h.mac ? `<div class="dr-info-cell"><div class="lab">MAC / ผู้ผลิต</div><div class="val" style="font-family:monospace">${esc(h.mac)}${h.mac_vendor?(' · '+esc(h.mac_vendor)):''}</div></div>` : ''}
   </div>`;
 
   // Stack profile + ส่วนประกอบอื่น (ชั้นที่ตรวจพบ)
