@@ -1308,6 +1308,172 @@ def _stack_profile(fp, cms_info):
     return layers
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# Online CVE enrichment (opt-in, hybrid) — ค้น CVE สดจาก CIRCL cve-search
+# (ฟรี ไม่ต้อง API key) เทียบช่วงเวอร์ชันของ "ทุกชั้น" ที่ fingerprint ดึงมาได้
+# Wordfence feed เดิมถูกปิด (HTTP 410) จึงใช้ CIRCL เป็นหลัก; plugin = best-effort
+# ═══════════════════════════════════════════════════════════════════════
+# component → (vendor, product) ตาม CPE ของ CIRCL/NVD
+CIRCL_MAP = {
+    "WordPress": ("wordpress", "wordpress"),
+    "Drupal": ("drupal", "drupal"),
+    "Joomla": ("joomla", "joomla"),
+    "Nextcloud": ("nextcloud", "nextcloud"),
+    "Moodle": ("moodle", "moodle"),
+    "PHP": ("php", "php"),
+    "NGINX": ("nginx", "nginx"),
+    "Apache": ("apache", "http_server"),
+    "OpenSSL": ("openssl", "openssl"),
+    "Synology DSM": ("synology", "diskstation_manager"),
+    "QNAP QTS": ("qnap", "qts"),
+    "pfSense": ("netgate", "pfsense"),
+    "MikroTik RouterOS": ("mikrotik", "routeros"),
+}
+_ONLINE_CVE_CACHE = {}  # memo per (vendor, product) ภายใน process เพื่อไม่ยิงซ้ำ
+
+
+def _parse_ver(s):
+    """'8.1.0' / '22.2.10.33' / '1.1.1f' → tuple ของเลขจำนวนเต็ม (ตัดอักษรท้ายทิ้ง); None ถ้าไม่มีเลข"""
+    if isinstance(s, (tuple, list)):
+        return tuple(int(x) for x in s) if s else None
+    parts = re.findall(r"\d+", str(s or ""))
+    return tuple(int(x) for x in parts) if parts else None
+
+
+def _vcmp(a, b):
+    """เทียบ version tuple แบบ pad ศูนย์ → -1 / 0 / 1"""
+    n = max(len(a), len(b))
+    a = tuple(a) + (0,) * (n - len(a))
+    b = tuple(b) + (0,) * (n - len(b))
+    return (a > b) - (a < b)
+
+
+def _ocve_in_affected(vt, versions):
+    """vt อยู่ในช่วงกระทบของ affected[].versions (รูปแบบ CVE 5.0: version/lessThan/lessThanOrEqual)"""
+    for v in versions or []:
+        if (v.get("status") or "affected") != "affected":
+            continue
+        raw_lo = v.get("version")
+        lo = _parse_ver(raw_lo) if raw_lo not in (None, "0", "*", "") else None
+        lt = _parse_ver(v.get("lessThan")) if v.get("lessThan") else None
+        lte = _parse_ver(v.get("lessThanOrEqual")) if v.get("lessThanOrEqual") else None
+        if lt is None and lte is None:
+            if lo and _vcmp(vt, lo) == 0:   # ระบุเวอร์ชันเดียวเป๊ะ
+                return True
+            continue
+        ok_lo = (lo is None) or _vcmp(vt, lo) >= 0
+        ok_hi = (lt is not None and _vcmp(vt, lt) < 0) or (lte is not None and _vcmp(vt, lte) <= 0)
+        if ok_lo and ok_hi:
+            return True
+    return False
+
+
+def _circl_cvss(rec):
+    """ดึง CVSS สูงสุด + severity จาก containers.cna/adp.metrics — คืน (score|None, 'Critical'|...)"""
+    best, sev = 0.0, ""
+    conts = rec.get("containers") or {}
+    blocks = [conts.get("cna") or {}] + list(conts.get("adp") or [])
+    for blk in blocks:
+        for mt in blk.get("metrics") or []:
+            for k in ("cvssV4_0", "cvssV3_1", "cvssV3_0", "cvssV2_0"):
+                cv = mt.get(k)
+                if cv and cv.get("baseScore") is not None and cv["baseScore"] >= best:
+                    best = cv["baseScore"]
+                    sev = (cv.get("baseSeverity") or "").title()
+    return (best or None), sev
+
+
+def _circl_cves(vendor, product, vt, timeout=12, cap=8):
+    """คืน list ของ finding (ONLINE-<CVE>) จาก CIRCL ที่กระทบเวอร์ชัน vt"""
+    out = []
+    if not vt:
+        return out
+    key = (vendor, product)
+    if key in _ONLINE_CVE_CACHE:
+        records = _ONLINE_CVE_CACHE[key]
+    else:
+        records = None
+        try:
+            r = requests.get(f"https://cve.circl.lu/api/search/{vendor}/{product}",
+                             timeout=timeout,
+                             headers={"Accept": "application/json", "User-Agent": "rmut-cert-toolkit"})
+            if r.status_code == 200:
+                records = ((r.json() or {}).get("results") or {}).get("nvd") or []
+        except Exception:
+            records = None
+        _ONLINE_CVE_CACHE[key] = records
+    if not records:
+        return out
+    for item in records:
+        try:
+            cid, rec = item[0], item[1]
+        except Exception:
+            continue
+        cna = (rec.get("containers") or {}).get("cna") or {}
+        if not any(_ocve_in_affected(vt, aff.get("versions")) for aff in (cna.get("affected") or [])):
+            continue
+        score, sev = _circl_cvss(rec)
+        desc = ""
+        for d in cna.get("descriptions") or []:
+            if (d.get("lang") or "").lower().startswith("en"):
+                desc = d.get("value", ""); break
+        cid_u = cid.upper()
+        out.append({
+            "cve": f"ONLINE-{cid_u}", "_real_cve": cid_u,
+            "name": f"{cid_u} — {product}",
+            "severity": sev or "Medium",
+            "trigger": "online CVE lookup (CIRCL) เทียบช่วงเวอร์ชัน",
+            "host_check": f"อัปเดต {product} ให้เป็นรุ่นที่แก้แล้ว (ดู advisory ของ {cid_u})",
+            "status": "vulnerable-version",
+            "reason": (f"{product} {'.'.join(map(str, vt))} อยู่ในช่วงกระทบของ {cid_u}"
+                       + (f" (CVSS {score})" if score else "")
+                       + (f" — {desc[:180]}" if desc else "")),
+            "_score": score or 0.0,
+        })
+    out.sort(key=lambda x: x.get("_score", 0.0), reverse=True)
+    return out[:cap]
+
+
+def _online_cve_scan(fp, cms_info, opts):
+    """ค้น CVE ออนไลน์สำหรับทุกชั้นที่ตรวจพบ (opt-in) — คืน {ONLINE-<cve>: finding}"""
+    if not opts.get("online_cve"):
+        return {}
+    out = {}
+    comps = []  # (ชื่อสำหรับแมป, version_tuple)
+    for pv in fp.get("php_versions", []):
+        comps.append(("PHP", _parse_ver(pv)))
+    if fp.get("server_family") == "NGINX" and fp.get("nginx_version"):
+        comps.append(("NGINX", _parse_ver(fp["nginx_version"])))
+    elif fp.get("server_family") == "Apache" and fp.get("server_version"):
+        comps.append(("Apache", _parse_ver(fp["server_version"])))
+    if (fp.get("modules") or {}).get("OpenSSL"):
+        comps.append(("OpenSSL", _parse_ver(fp["modules"]["OpenSSL"])))
+    if fp.get("device") in CIRCL_MAP and fp.get("device_version"):
+        comps.append((fp["device"], _parse_ver(fp["device_version"])))
+    app = (cms_info or {}).get("app") or {}
+    if app.get("product") in CIRCL_MAP and app.get("version"):
+        comps.append((app["product"], app["version"]))
+
+    timeout = min(float(opts.get("timeout", 8.0)) + 5, 15)
+    for name, vt in comps:
+        mapping = CIRCL_MAP.get(name)
+        if not mapping or not vt:
+            continue
+        for f in _circl_cves(mapping[0], mapping[1], vt, timeout=timeout):
+            out.setdefault(f["cve"], f)
+
+    # plugin (WordPress) — best-effort: ปลั๊กอินมี CPE ไม่สม่ำเสมอใน free source
+    # จึงลองแบบ wordpress/<slug_underscore> และจำกัดจำนวน (กันยิงเยอะ/ช้า)
+    for p in (app.get("plugins") or [])[:8]:
+        pvt = _parse_ver(p.get("version"))
+        if not pvt:
+            continue
+        slug_us = p["slug"].replace("-", "_")
+        for f in _circl_cves("wordpress", slug_us, pvt, timeout=timeout, cap=3):
+            out.setdefault(f["cve"], f)
+    return out
+
+
 def _detect_cms(session, base, prefix, timeout, all_urls):
     hits = {}
     for url in all_urls:
@@ -2475,6 +2641,9 @@ def scan_single_target(target_str, opts, idx=1, total=1):
     device_cves = _analyze_device(fp)
     fp["stack_layers"] = _stack_profile(fp, cms_info)
     _v and fp["stack_layers"] and print(f"    Stack: {' → '.join(fp['stack_layers'])}")
+    online_cves = _online_cve_scan(fp, cms_info, opts)
+    if online_cves:
+        _v and print(f"    🌐 Online CVE: พบ {len(online_cves)} รายการจากการค้นสด")
     session_info = _detect_session(session, base, path_prefix, endpoints, opts["timeout"])
     if session_info.get("session_used"):
         fp["php_detected"] = True
@@ -2529,11 +2698,12 @@ def scan_single_target(target_str, opts, idx=1, total=1):
     all_r = (list(nginx_cves.values()) + list(php_cves.values()) +
              ([cve_115560] if cve_115560 else []) +
              list(nodejs_cves.values()) + list(gitlab_cves.values()) +
-             list(app_cves.values()) + list(device_cves.values()))
+             list(app_cves.values()) + list(device_cves.values()) +
+             list(online_cves.values()))
 
     if selected:
         all_r = [r for r in all_r if r.get("cve") in selected
-                 or r.get("cve", "").startswith(("UNSUPPORTED-", "APP-", "DEVICE-"))]
+                 or r.get("cve", "").startswith(("UNSUPPORTED-", "APP-", "DEVICE-", "ONLINE-"))]
     vuln_cnt = sum(1 for r in all_r if r["status"] in ("vulnerable", "high-risk", "likely-vulnerable", "unpatched"))
     warn_cnt = sum(1 for r in all_r if r["status"] in ("medium-risk", "vulnerable-version", "vulnerable-conditions"))
     crit = vuln_cnt + warn_cnt
@@ -9179,7 +9349,7 @@ def menu_scan():
 
     opts = {"depth": _SCAN_DEPTH, "max_pages": _SCAN_MAX_PAGES, "timeout": 8.0,
             "target_threads": 3, "lfi_threads": 5, "rate": 5.0,
-            "skip_lfi": False, "verbose": False, "no_verify_ssl": False}
+            "skip_lfi": False, "verbose": False, "no_verify_ssl": False, "online_cve": False}
 
     if ask_yn("ตั้งค่าการสแกนขั้นสูง (Threads / Crawl Depth / Skip LFI)?", False):
         opts["target_threads"] = ask_int("Threads", 3, 1, 30)
@@ -9189,6 +9359,7 @@ def menu_scan():
         opts["host_budget"] = ask_int("เวลารวมสูงสุดต่อโฮสต์ (วินาที) เกินแล้วข้าม", 60, 10, 600)
         opts["skip_lfi"] = ask_yn("Skip LFI scan?", False)
         opts["verbose"] = ask_yn("Verbose?", False)
+        opts["online_cve"] = ask_yn("ค้น CVE ออนไลน์ (CIRCL) ตามเวอร์ชันที่พบ? [ต้องต่อเน็ต]", False)
 
     # ── แสดง CVE + ขอบเขต ก่อนสแกน ──
     if not confirm_scan_scope(scope, opts):
@@ -9297,7 +9468,7 @@ def menu_rce_verify():
 
         opts = {"depth": _SCAN_DEPTH, "max_pages": _SCAN_MAX_PAGES, "timeout": 8.0,
                 "target_threads": 5, "lfi_threads": 5, "rate": 5.0,
-                "skip_lfi": False, "verbose": False, "no_verify_ssl": False}
+                "skip_lfi": False, "verbose": False, "no_verify_ssl": False, "online_cve": False}
         print(f"\n  [*] Scanning {len(targets)} hosts ...")
         results = run_scan(targets, opts)
 
@@ -9326,7 +9497,7 @@ def menu_rce_verify():
 
         opts = {"depth": _SCAN_DEPTH, "max_pages": _SCAN_MAX_PAGES, "timeout": 8.0,
                 "target_threads": 5, "lfi_threads": 5, "rate": 5.0,
-                "skip_lfi": False, "verbose": False, "no_verify_ssl": False}
+                "skip_lfi": False, "verbose": False, "no_verify_ssl": False, "online_cve": False}
         print(f"\n  [*] Scanning {len(targets)} subdomains ...")
         results = run_scan(targets, opts)
 
@@ -9577,7 +9748,7 @@ def menu_pipeline():
 
     opts = {"depth": _SCAN_DEPTH, "max_pages": _SCAN_MAX_PAGES, "timeout": 8.0,
             "target_threads": default_threads, "lfi_threads": 5, "rate": 5.0,
-            "skip_lfi": False, "verbose": False, "no_verify_ssl": False}
+            "skip_lfi": False, "verbose": False, "no_verify_ssl": False, "online_cve": False}
 
     if ask_yn("ตั้งค่าการสแกนขั้นสูง (Threads / Crawl Depth / Skip LFI)?", False):
         opts["target_threads"] = ask_int("Threads", default_threads, 1, 30)
@@ -9587,6 +9758,7 @@ def menu_pipeline():
         opts["host_budget"] = ask_int("เวลารวมสูงสุดต่อโฮสต์ (วินาที) เกินแล้วข้าม", 60, 10, 600)
         opts["skip_lfi"] = ask_yn("Skip LFI scan?", False)
         opts["verbose"] = ask_yn("Verbose?", False)
+        opts["online_cve"] = ask_yn("ค้น CVE ออนไลน์ (CIRCL) ตามเวอร์ชันที่พบ? [ต้องต่อเน็ต]", False)
 
     if not confirm_scan_scope(scope, opts):
         print(c("  ยกเลิก", C.YEL))
