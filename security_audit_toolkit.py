@@ -930,7 +930,8 @@ def _fingerprint(session, base, prefix, timeout, verbose=False):
           "nodejs_detected": False, "nodejs_versions": [],
           "nodejs_frameworks": [], "cdn_proxy": None, "headers": {},
           "os_version": "", "modules": {}, "device": None, "device_version": "",
-          "device_category": "", "container_layers": [], "components": []}
+          "device_category": "", "container_layers": [], "components": [],
+          "composer_packages": []}
     node_vers, node_fws = set(), set()
     php_ev = set()
 
@@ -1418,9 +1419,27 @@ EXPOSURE_CHECKS = [
 ]
 
 
-def _probe_exposures(session, base, prefix, timeout):
+def _parse_composer_lock(text):
+    """แยกรายชื่อแพ็กเกจ PHP + เวอร์ชันจาก composer.lock (หรือ composer.json) → [{name, version}]"""
+    out = []
+    try:
+        data = json.loads(text)
+    except Exception:
+        return out
+    for key in ("packages", "packages-dev"):
+        for p in data.get(key, []) or []:
+            nm = p.get("name") or ""
+            ver = (p.get("version") or "").lstrip("vV").strip()
+            if nm and ver and not ver.startswith("dev-") and re.search(r"\d", ver):
+                out.append({"name": nm, "version": ver})
+    # composer.json: require/require-dev เป็น constraint (เช่น "^8.1") — ข้าม ไม่ใช่เวอร์ชันติดตั้งจริง
+    return out
+
+
+def _probe_exposures(session, base, prefix, timeout, fp=None):
     """ตรวจไฟล์/endpoint ที่เปิดเผย (.env/.git/composer/phpinfo/server-status/backup)
-    — ยืนยันด้วย validator กันผลบวกปลอม คืน {EXPOSURE-<slug>: finding}"""
+    — ยืนยันด้วย validator กันผลบวกปลอม คืน {EXPOSURE-<slug>: finding}
+    ถ้า composer.lock เปิดเผย → แยกแพ็กเกจเก็บใน fp['composer_packages'] ให้ online lookup เทียบ CVE"""
     out = {}
     t = min(timeout, 5.0)
     for path, name, sev, validator in EXPOSURE_CHECKS:
@@ -1430,17 +1449,24 @@ def _probe_exposures(session, base, prefix, timeout):
             continue
         if r.status_code != 200:
             continue
-        body = (r.text or "")[:8000]
+        full = r.text or ""
+        body = full[:8000]
         if validator and not re.search(validator, body, re.I):
             continue
         slug = path.strip("/").replace("/", "-").replace(".", "")
         key = f"EXPOSURE-{slug}"
+        reason = f"เข้าถึง {path} ได้ (HTTP 200) — {name} ควรปิดและตรวจสอบว่าถูกเข้าถึงไปแล้วหรือไม่"
+        if path == "/composer.lock" and fp is not None:
+            pkgs = _parse_composer_lock(full)
+            if pkgs:
+                fp["composer_packages"] = pkgs
+                reason += f" | แยกได้ {len(pkgs)} แพ็กเกจ (จะเทียบ CVE ถ้าเปิด online lookup)"
         out[key] = {
             "cve": key, "name": name, "severity": sev,
             "trigger": f"เข้าถึง {path} ได้จากภายนอก (HTTP 200 + ยืนยันเนื้อหา)",
             "host_check": f"ปิดการเข้าถึง {path} ที่ web server (deny/location) และหมุนเวียน secret ที่รั่วทันที",
             "status": "vulnerable",
-            "reason": f"เข้าถึง {path} ได้ (HTTP 200) — {name} ควรปิดและตรวจสอบว่าถูกเข้าถึงไปแล้วหรือไม่",
+            "reason": reason,
         }
     return out
 
@@ -1784,6 +1810,20 @@ def _online_cve_scan(fp, cms_info, opts):
         if not mapping or not vt:
             continue
         for f in _circl_cves(mapping[0], mapping[1], vt, timeout=timeout):
+            out.setdefault(f["cve"], f)
+
+    # composer.lock packages (ถ้าเปิดเผย) — เวอร์ชันเป๊ะทุก dependency → เทียบ CVE
+    # CPE ของ composer package ไม่สม่ำเสมอ จึงเป็น best-effort (บางตัว match เช่น laravel/symfony/phpmailer)
+    for pkg in (fp.get("composer_packages") or [])[:40]:
+        pvt = _parse_ver(pkg.get("version"))
+        nm = pkg.get("name", "")
+        if not pvt or "/" not in nm:
+            continue
+        vendor, _, product = nm.partition("/")
+        for f in _circl_cves(vendor, product, pvt, timeout=timeout, cap=3):
+            f = dict(f)
+            f["name"] = f"{f['_real_cve']} — {nm}"
+            f["reason"] = f"แพ็กเกจ {nm} {pkg['version']}: " + f["reason"]
             out.setdefault(f["cve"], f)
 
     # plugin (WordPress) — best-effort: ปลั๊กอินมี CPE ไม่สม่ำเสมอใน free source
@@ -2969,7 +3009,7 @@ def scan_single_target(target_str, opts, idx=1, total=1):
     app_cves = _analyze_apps(cms_info)
     device_cves = _analyze_device(fp)
     component_cves = _analyze_components(fp)
-    exposure_cves = _probe_exposures(session, base, path_prefix, opts["timeout"])
+    exposure_cves = _probe_exposures(session, base, path_prefix, opts["timeout"], fp=fp)
     framework_cves = _probe_framework(session, base, path_prefix, fp, opts["timeout"])
     header_cves = _audit_security_headers(fp, base)
     fp["stack_layers"] = _stack_profile(fp, cms_info)
