@@ -345,6 +345,25 @@ DEVICE_SIGS = [
     ("Plesk",              [r"\bplesk\b"], r"Plesk[ /]+v?([\d.]+)", "Control Panel"),
     ("DirectAdmin",        [r"directadmin"], None, "Control Panel"),
     ("Webmin",             [r"\bwebmin\b"], r"Webmin[ /]+([\d.]+)", "Control Panel"),
+    # ── Control panel โอเพนซอร์ส/ฟรี ยอดนิยม (มักเปิดพอร์ตเฉพาะ เช่น 8083/8090/7800) ──
+    ("HestiaCP",           [r"hestia\s*control\s*panel", r"\bhestiacp\b", r"hst[_-]", r"/login/\?"],
+     r"hestia[^\d<]{0,24}v?(\d+\.\d+[\d.]*)", "Control Panel"),
+    ("VestaCP",            [r"vesta\s*control\s*panel", r"\bvestacp\b", r"\bvst_"],
+     r"vesta[^\d<]{0,24}v?(\d+\.\d+[\d.]*)", "Control Panel"),
+    ("CyberPanel",         [r"cyberpanel"], r"cyberpanel[^\d<]{0,16}v?(\d+\.\d+[\d.]*)", "Control Panel"),
+    ("aaPanel / BT-Panel", [r"aapanel", r"bt-panel", r"\bbt_", r"/bt_", r"宝塔", r"baota"],
+     None, "Control Panel"),
+    ("ISPConfig",          [r"ispconfig"], r"ispconfig[^\d<]{0,16}(\d+\.\d+[\d.]*)", "Control Panel"),
+    ("ISPmanager",         [r"ispmanager"], r"ispmanager[^\d<]{0,16}(\d+\.\d+[\d.]*)", "Control Panel"),
+    ("Froxlor",            [r"froxlor"], r"froxlor[^\d<]{0,16}(\d+\.\d+[\d.]*)", "Control Panel"),
+    ("Ajenti",             [r"\bajenti\b"], r"ajenti[^\d<]{0,12}(\d+\.\d+[\d.]*)", "Control Panel"),
+    ("Webuzo",             [r"\bwebuzo\b"], r"webuzo[^\d<]{0,12}(\d+\.\d+[\d.]*)", "Control Panel"),
+    ("CentOS Web Panel",   [r"centos\s*web\s*panel", r"\bcwpsrv\b", r"/cwp-", r"\bcwp\b.{0,20}panel"],
+     None, "Control Panel"),
+    ("CloudPanel",         [r"cloudpanel"], r"cloudpanel[^\d<]{0,12}(\d+\.\d+[\d.]*)", "Control Panel"),
+    ("Virtualmin",         [r"virtualmin"], r"virtualmin[^\d<]{0,12}(\d+\.\d+[\d.]*)", "Control Panel"),
+    ("KeyHelp",            [r"keyhelp"], r"keyhelp[^\d<]{0,12}v?(\d+\.\d+[\d.]*)", "Control Panel"),
+    ("Sentora/ZPanel",     [r"\bsentora\b", r"\bzpanel\b"], None, "Control Panel"),
     # ── กล้องวงจรปิด / NVR / IoT (กลุ่ม 4 ThaiCERT — อุปกรณ์เครือข่าย) ──
     ("Hikvision Camera/NVR", [r"hikvision", r"/doc/page/login", r"dnvrs-webs", r"dvrdvs-webs",
                               r"app-webs", r"webcomponents\.js"], None, "CCTV/Camera"),
@@ -2155,6 +2174,16 @@ CIRCL_MAP = {
     "QNAP QTS": ("qnap", "qts"),
     "pfSense": ("netgate", "pfsense"),
     "MikroTik RouterOS": ("mikrotik", "routeros"),
+    # control panel โอเพนซอร์ส (ตามชื่อ product ใน NVD)
+    "HestiaCP": ("hestiacp", "hestiacp"),
+    "VestaCP": ("vestacp", "vesta_control_panel"),
+    "CyberPanel": ("cyberpanel", "cyberpanel"),
+    "ISPConfig": ("ispconfig", "ispconfig"),
+    "Froxlor": ("froxlor", "froxlor"),
+    "Ajenti": ("ajenti", "ajenti"),
+    "CentOS Web Panel": ("control-webpanel", "webpanel"),
+    "Webmin": ("webmin", "webmin"),
+    "Virtualmin": ("virtualmin", "virtualmin"),
     # ส่วนประกอบอื่น ๆ (DB / JS libs / tools)
     "MySQL/MariaDB": ("oracle", "mysql"),
     "MariaDB": ("mariadb", "mariadb"),
@@ -3926,10 +3955,13 @@ def _hlabel(t):
 # พอร์ตเช็ก "โฮสต์ตอบสนองไหม" (เร็ว — เจอพอร์ตแรกก็พอ)
 _LIVENESS_PORTS = [80, 443, 8080, 8443, 22]
 # พอร์ตเว็บ/แอดมิน/อุปกรณ์ ที่จะ "ไล่หาให้ครบ" บนโฮสต์ที่ตอบสนอง แล้วสแกนทุกพอร์ตที่เปิด (แก้ปัญหา 'ใช้พอร์ตอื่นจะไม่เจอ')
-_WEB_PORTS = [80, 443, 8080, 8443, 8000, 8008, 8888, 10000, 2082, 2083, 2086, 2087, 2095, 2096]
+_WEB_PORTS = [80, 443, 8080, 8443, 8000, 8008, 8888, 10000, 2082, 2083, 2086, 2087, 2095, 2096,
+              8083, 8090, 2222]  # + 8083 Vesta/Hestia · 8090 CyberPanel · 2222 DirectAdmin
 _WEB_PORTS_LAN = _WEB_PORTS + [81, 82, 88, 591, 7001, 7080, 8081, 8082, 8088, 8181, 8800,
                                9000, 9080, 9090, 9091, 9443, 10443, 4443, 5000, 5001, 3000,
-                               5601, 7474, 8443, 8834, 9200, 61208]
+                               5601, 7474, 8834, 9200, 61208,
+                               # control panel โอเพนซอร์ส: aaPanel/BT · Webuzo · CWP
+                               7800, 888, 2002, 2004, 2030, 2031]
 
 
 def _host_liveness(target, ports, timeout):
@@ -5780,8 +5812,10 @@ THAICERT_GROUPS = [
      "ex": "Laravel, Symfony, CodeIgniter, Yii, Slim", "cap": 50, "cap_lan": 55,
      "note": "เห็นการมีอยู่ + debug ที่เปิดทิ้ง (Ignition/Profiler) แต่เฟรมเวิร์กไม่ค่อยรั่วเวอร์ชัน; Yii/Slim ยังไม่รองรับ"},
     {"no": 3, "name": "Hosting Control Panel",
-     "ex": "cPanel, Plesk, DirectAdmin, Webmin", "cap": 65, "cap_lan": 80,
-     "note": "ระบุแผงควบคุมได้ แต่ cPanel/DirectAdmin ไม่เปิดเผยเวอร์ชัน → เทียบ CVE ได้เฉพาะ Plesk/Webmin บางรุ่น"},
+     "ex": "cPanel, Plesk, DirectAdmin, Webmin + โอเพนซอร์ส: Hestia, Vesta, CyberPanel, aaPanel, ISPConfig, CWP",
+     "cap": 65, "cap_lan": 80,
+     "note": "ระบุแผงควบคุม (รวมโอเพนซอร์ส Hestia/Vesta/CyberPanel/aaPanel/ISPConfig/CWP) + เวอร์ชัน→CVE; "
+             "cPanel/DirectAdmin ไม่เปิดเวอร์ชัน แต่ตัวโอเพนซอร์สหลายตัวรั่วเวอร์ชันจึงเทียบ CVE ได้"},
     {"no": 4, "name": "ซอฟต์แวร์ & อุปกรณ์สำเร็จรูป (NAS/กล้อง/Network)",
      "ex": "Synology, QNAP, Hikvision, pfSense, FortiGate, MikroTik", "cap": 60, "cap_lan": 85,
      "note": "คลังสัญญาณอุปกรณ์กว้าง (NAS/CCTV/firewall/router) + MAC/OUI (เฉพาะ LAN); จุดอ่อน: firmware ส่วนใหญ่ปิด, ไม่มี ICS/SCADA"},
@@ -5827,7 +5861,9 @@ def _thaicert_coverage(data):
 
     CMS1 = ("wordpress", "drupal", "joomla", "moodle", "nextcloud")
     FW2 = ("laravel", "symfony", "codeigniter", "yii", "slim")
-    CP3 = ("cpanel", "plesk", "directadmin", "webmin")
+    CP3 = ("cpanel", "plesk", "directadmin", "webmin", "hestia", "vesta", "cyberpanel",
+           "aapanel", "bt-panel", "ispconfig", "ispmanager", "froxlor", "ajenti", "webuzo",
+           "centos web panel", "cwp", "cloudpanel", "virtualmin", "keyhelp", "sentora", "zpanel")
     CTR5 = ("traefik", "kubernetes", "k8s", "envoy", "istio", "haproxy", "docker", "xampp")
     for h in data.get("hosts", []):
         if not h.get("reachable"):

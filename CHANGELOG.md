@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Open-source / free hosting control-panel detection (ThaiCERT group 3):
+  HestiaCP, VestaCP, CyberPanel, aaPanel/BT-Panel, ISPConfig, ISPmanager,
+  Froxlor, Ajenti, Webuzo, CentOS Web Panel (CWP), CloudPanel, Virtualmin,
+  KeyHelp, Sentora/ZPanel — with version extraction where the panel leaks it
+  (Hestia/Vesta/CyberPanel/ISPConfig/…) and online-CVE (CIRCL) mappings for the
+  panels that have NVD CPEs. Their default ports (8083, 8090, 2222, 7800, 888,
+  2002/2004, 2030/2031) are added to host discovery, and they now classify
+  under group 3 (Control Panel) instead of group 4.
 - Banner-based OS detection (pure-Python, no nmap, no root) so OS fingerprinting
   survives compilation to a single .app/.exe without bundling a large external
   binary. Grabs SSH/FTP/SMTP banners and checks the Windows service-port profile
