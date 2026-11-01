@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "security-audit-toolkit"
-version = "6.4.0"
+version = "6.5.0"
 description = "All-in-One authorized vulnerability scanner, RCE verifier, and report generator for CERT teams."
 readme = "README.md"
 requires-python = ">=3.9"

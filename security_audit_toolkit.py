@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-security_audit_toolkit.py — Security Audit Toolkit (RMUT CERT) v6.4
+security_audit_toolkit.py — Security Audit Toolkit (RMUT CERT) v6.5
 Scanner (14 CVEs) + RCE Verify (chain-of-custody) + Report Generator (PDF/CSV/Excel/HTML)
 + Cross-Menu Navigation + CVE Display + File Browser (GUI & Interactive CLI)
 
@@ -91,7 +91,7 @@ except Exception:
 # SECTION 1 — Constants
 # ═══════════════════════════════════════════════════════════════════════
 
-VERSION = "6.4"
+VERSION = "6.5"
 _OWN_TARGET = False     # ตั้งเป็น True เมื่อใช้ --i-own-this-target
 _NO_INTERACTIVE = False # True เมื่อใช้ --no-interactive (headless / GUI mode)
 _SCAN_DEPTH = 2         # ความลึกการ crawl (--depth)
@@ -10810,13 +10810,22 @@ def run_generate_report(json_path, output_dir="reports", evidence_dir=None):
     out.mkdir(parents=True, exist_ok=True)
     print(f"  📁 โฟลเดอร์ผลลัพธ์: {out}")
 
-    # บันทึก JSON ต้นฉบับไว้ในโฟลเดอร์เดียวกับรายงาน
+    # บันทึก JSON ต้นฉบับไว้ในโฟลเดอร์เดียวกับรายงาน (ย้ายมาไว้ที่เดียว ไม่ให้มีไฟล์ซ้ำซ้อน)
+    dest_json = out / Path(json_path).name
     try:
         import shutil as _shutil
-        _shutil.copy(json_path, out / Path(json_path).name)
-        print(f"  ✅ JSON: {out / Path(json_path).name}")
+        if Path(json_path).resolve() != dest_json.resolve():
+            _shutil.move(str(json_path), str(dest_json))
+        print(f"  ✅ JSON: {dest_json}")
     except Exception as _je:
-        print(f"  ⚠ ไม่สามารถบันทึก JSON: {_je}")
+        try:
+            import shutil as _shutil
+            _shutil.copy(str(json_path), str(dest_json))
+            if Path(json_path).exists() and Path(json_path).resolve() != dest_json.resolve():
+                Path(json_path).unlink()
+            print(f"  ✅ JSON: {dest_json}")
+        except Exception:
+            print(f"  ⚠ ไม่สามารถบันทึก JSON: {_je}")
 
     font_path = _find_font()
     pdf_font = _register_font(font_path)
@@ -10904,8 +10913,10 @@ def run_generate_report(json_path, output_dir="reports", evidence_dir=None):
 
     return {"pdf": str(pdf_path) if pdf_path else None,
             "excel": str(excel_path) if excel_path else None,
+            "csv": str(tc_csv_path) if tc_csv_path else None,
             "thaicert_csv": str(tc_csv_path) if tc_csv_path else None,
             "html": str(html_path) if html_path else None,
+            "json": str(dest_json) if dest_json else None,
             "out_dir": str(out)}
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -12246,7 +12257,8 @@ Examples:
             results = run_scan(targets, opts)
             name = safe_name(raw_pipeline.replace("/", "_").replace(".", "_"))
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            json_path = unique_output_path(".", f"pipeline_cidr_{name}_{ts}", ".json")
+            Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+            json_path = unique_output_path(args.output_dir, f"pipeline_cidr_{name}_{ts}", ".json")
             with open(json_path, "w") as f:
                 json.dump({"scan_time": datetime.now().isoformat(), "target": raw_pipeline,
                            "total_targets": len(results), "results": results, "scan_opts": opts, "tool_version": "RMUT CERT All-in-One v" + VERSION}, f,
@@ -12273,7 +12285,8 @@ Examples:
             results = run_scan(targets, opts)
             name = safe_name(Path(raw_pipeline).stem)
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            json_path = unique_output_path(".", f"pipeline_file_{name}_{ts}", ".json")
+            Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+            json_path = unique_output_path(args.output_dir, f"pipeline_file_{name}_{ts}", ".json")
             with open(json_path, "w") as f:
                 json.dump({"scan_time": datetime.now().isoformat(), "target": Path(raw_pipeline).name,
                            "total_targets": len(results), "results": results, "scan_opts": opts, "tool_version": "RMUT CERT All-in-One v" + VERSION}, f,
@@ -12297,7 +12310,8 @@ Examples:
 
         name = safe_name(urlparse(target).hostname or "target")
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        json_path = unique_output_path(".", f"pipeline_{name}_{ts}", ".json")
+        Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+        json_path = unique_output_path(args.output_dir, f"pipeline_{name}_{ts}", ".json")
         with open(json_path, "w") as f:
             json.dump({"scan_time": datetime.now().isoformat(), "target": target,
                        "total_targets": 1, "results": results, "scan_opts": opts, "tool_version": "RMUT CERT All-in-One v" + VERSION}, f,

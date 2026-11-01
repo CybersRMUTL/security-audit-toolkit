@@ -6,6 +6,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [6.5.0] — 2026-11-01
+
+Backward compatible with 6.3.0 / 6.4.0: older scan JSON still loads, and the
+previous releases stay usable via tags `v6.3.0` / `v6.4.0`. This release adds a
+second large batch of detection and reporting on top of 6.4.0.
+
 ### Added
 - Error-page fingerprinting: deliberately triggers 404/400 pages and mines
   them for OS/engine/version that a hardened home page hides — the Apache
@@ -169,6 +175,7 @@ old release stays usable via tag `v6.3.0`.
 - Per-host CVSS v3.1 risk index.
 - Interactive menu and scriptable CLI.
 
-[Unreleased]: https://github.com/CybersRMUTL/security-audit-toolkit/compare/v6.4.0...HEAD
+[Unreleased]: https://github.com/CybersRMUTL/security-audit-toolkit/compare/v6.5.0...HEAD
+[6.5.0]: https://github.com/CybersRMUTL/security-audit-toolkit/compare/v6.4.0...v6.5.0
 [6.4.0]: https://github.com/CybersRMUTL/security-audit-toolkit/compare/v6.3.0...v6.4.0
 [6.3.0]: https://github.com/CybersRMUTL/security-audit-toolkit/releases/tag/v6.3.0
