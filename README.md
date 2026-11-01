@@ -52,6 +52,7 @@
 |----------------|-----------|---------------------|
 | 🍎 **macOS** (Apple Silicon) | **[⬇️ SecurityAuditToolkit-v6.5.0-macOS.zip](https://github.com/CybersRMUTL/security-audit-toolkit/releases/download/v6.5.0/SecurityAuditToolkit-v6.5.0-macOS.zip)** | ชิป Apple M1/M2/M3/M4 · macOS 13 (Ventura) ขึ้นไป |
 | 🪟 **Windows** | **[⬇️ SecurityAuditToolkit-v6.5.0-Windows.zip](https://github.com/CybersRMUTL/security-audit-toolkit/releases/download/v6.5.0/SecurityAuditToolkit-v6.5.0-Windows.zip)** | Windows 10 / 11 (64-bit) |
+| 🐧 **Linux / ทุกระบบ (CLI)** | **[💻 โค้ด CLI — `git clone`](#-ติดตั้งจากซอร์สโค้ด-python)** | Python 3.9+ (รันได้ทุก OS รวม Linux) |
 
 📦 ดูไฟล์ทั้งหมดและเวอร์ชันก่อนหน้าได้ที่ **[หน้า Releases](https://github.com/CybersRMUTL/security-audit-toolkit/releases)**
 
@@ -81,6 +82,25 @@
 3. **ครั้งแรก Windows SmartScreen อาจเตือน** "Windows protected your PC" — ให้คลิก **More info** → **Run anyway**
    - ถ้าถูกบล็อกหลายไฟล์ ดับเบิลคลิก **`Unlock_Security.bat`** ที่แนบมา เพื่อปลด Mark-of-the-Web ให้ทั้งหมด
 4. **ไม่ต้องติดตั้ง Python ใดๆ** — ไฟล์ `.exe` พกพาได้ นำไปใส่แฟลชไดรฟ์หรือส่งให้เครื่องอื่นเปิดได้ทันที
+
+</details>
+
+<details>
+<summary><b>🐧 วิธีใช้งานแบบ CLI (git clone — ทุกระบบ รวม Linux)</b> (คลิกเพื่อดูขั้นตอน)</summary>
+
+<br>
+
+เหมาะกับผู้ใช้ Linux, เซิร์ฟเวอร์, นักพัฒนา หรือผู้ที่อยากรันบนเทอร์มินัล / ทำสคริปต์อัตโนมัติ — ต้องมี **Python 3.9 ขึ้นไป**
+
+```bash
+git clone https://github.com/CybersRMUTL/security-audit-toolkit.git
+cd security-audit-toolkit
+pip install -r requirements.txt
+python3 security_audit_toolkit.py
+```
+
+> ผู้ใช้ Windows ที่รันจากซอร์ส ให้ใช้ `python` แทน `python3`
+> รายละเอียดครบถ้วน (ขั้นตอนทีละข้อ, คำสั่ง CLI, การตั้งค่าขั้นสูง) อยู่ในหัวข้อ **[ติดตั้งจากซอร์สโค้ด (Python)](#-ติดตั้งจากซอร์สโค้ด-python)** ด้านล่าง
 
 </details>
 
