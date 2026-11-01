@@ -93,6 +93,7 @@ except Exception:
 
 VERSION = "6.4"
 _OWN_TARGET = False     # ตั้งเป็น True เมื่อใช้ --i-own-this-target
+_NO_INTERACTIVE = False # True เมื่อใช้ --no-interactive (headless / GUI mode)
 _SCAN_DEPTH = 2         # ความลึกการ crawl (--depth)
 _SCAN_MAX_PAGES = 50    # จำนวนหน้าสูงสุดต่อโฮสต์ (--max-pages)
 _SCAN_MODE = "auto"     # โหมดสแกนที่เลือกตั้งแต่ต้น (interactive): auto | external | lan
@@ -1819,6 +1820,100 @@ def _lan_hint(kind, msg):
     print(msg)
 
 
+# path disclosure ใน error/stack trace → บ่งชี้ OS
+_PATH_OS = [
+    (re.compile(r"[a-z]:\\(?:inetpub|windows|wwwroot)", re.I), "Windows (IIS/Win)"),
+    (re.compile(r"[a-z]:\\xampp", re.I), "Windows (XAMPP)"),
+    (re.compile(r"[a-z]:\\(?:wamp64|wamp|laragon)", re.I), "Windows (WAMP/Laragon)"),
+    (re.compile(r"[a-z]:\\[\w\\]", re.I), "Windows"),
+    (re.compile(r"/var/www|/usr/share/nginx|/home/[\w.\-]+/public_html|/opt/lampp", re.I), "Linux/Unix"),
+    (re.compile(r"/Users/[\w.\-]+/", re.I), "macOS"),
+]
+# framework/engine debug/error page signature → engine
+_ERR_ENGINE = [
+    (re.compile(r"whoops\b|illuminate\\\\|laravel", re.I), "Laravel (debug/Whoops)"),
+    (re.compile(r"symfony\\\\component|twig_error|web profiler", re.I), "Symfony (debug)"),
+    (re.compile(r"traceback \(most recent|werkzeug|djangoproject|flask", re.I), "Python (Django/Flask)"),
+    (re.compile(r"actioncontroller|action_dispatch|rails", re.I), "Ruby on Rails"),
+    (re.compile(r"asp\.net|aspxerrorpath|system\.web", re.I), "ASP.NET (Windows)"),
+    (re.compile(r"apache tomcat/|org\.apache\.(?:tomcat|catalina)", re.I), "Apache Tomcat (Java)"),
+    (re.compile(r"org\.springframework|whitelabel error page", re.I), "Spring Boot (Java)"),
+    (re.compile(r"cannot get /|at layer\.handle", re.I), "Node.js/Express"),
+]
+
+
+def _probe_error_pages(session, base, prefix, fp, timeout):
+    """ยิง request ให้เกิด error page (404/400) แล้วดึง OS/engine/เวอร์ชันที่หน้า error มักรั่ว
+    — Apache default page โชว์ 'Apache/2.4.41 (Ubuntu)' (ได้ทั้ง server + OS); PHP/stack trace โชว์ path → OS;
+      framework debug page → engine. เติม fp เฉพาะช่องที่ยังว่าง (ไม่ทับผลที่ยืนยันแล้ว)
+    คืน {EXPOSURE-ErrorLeak: finding} ถ้าหน้า error เปิดเผยข้อมูลภายในมากเกินไป"""
+    import uuid as _uuid
+    t = min(timeout, 5.0)
+    out = {}
+    paths = [f"{prefix}/{_uuid.uuid4().hex[:10]}-notexist", f"{prefix}/%c0%ae%c0%ae/", f"{prefix}/'\"><x"]
+    verbose = False
+    for path in paths:
+        try:
+            r = session.get(base + path, timeout=t, allow_redirects=False)
+        except requests.RequestException:
+            continue
+        blob = " ".join(f"{k}: {v}" for k, v in r.headers.items()) + "\n" + (r.text or "")[:8000]
+        low = blob.lower()
+        # 1) server family + version (หน้า error มักโชว์แม้ header หน้าแรกถูกซ่อน)
+        if fp.get("server_family", "Unknown") == "Unknown" or not fp.get("server_version"):
+            for pat, fam in SERVER_SIGS:
+                m = pat.search(blob)
+                if m:
+                    if fp.get("server_family", "Unknown") == "Unknown":
+                        fp["server_family"] = fam
+                    if m.lastindex and m.group(1) and not fp.get("server_version"):
+                        fp["server_version"] = m.group(1)
+                    break
+        # 2) OS token ในวงเล็บ เช่น Apache "...(Ubuntu)" → os + os_version (เชื่อมั่นสูง)
+        if not fp.get("os_version"):
+            for pm in OS_PAREN_RE.finditer(blob):
+                tok = pm.group(1).strip()
+                name = next((nm for pat, nm in OS_PATTERNS if pat.search(tok)), "")
+                if name:
+                    fp["os"], fp["os_version"] = name, tok
+                    fp["os_source"], fp["os_confidence"] = "error page (Server token)", "สูง"
+                    break
+        # 3) โมดูล (OpenSSL/mod_* ฯลฯ) ที่รั่วใน error page
+        mm = MODULE_VER_RE.search(blob)
+        if mm:
+            fp.setdefault("modules", {}).setdefault(mm.group(1), mm.group(2))
+        # 4) PHP version จาก error/stack trace
+        if isinstance(fp.get("php_versions"), set):
+            for m in VERSION_RE.finditer(blob):
+                fp["php_versions"].add(m.group(1)); fp["php_detected"] = True
+        # 5) path disclosure → OS (ถ้ายังไม่รู้)
+        if fp.get("os", "Unknown") in ("", "Unknown"):
+            for rx, osname in _PATH_OS:
+                if rx.search(blob):
+                    fp["os"] = osname
+                    fp["os_source"], fp["os_confidence"] = "error page (path disclosure)", "ปานกลาง"
+                    break
+        # 6) framework/engine debug signature
+        for rx, eng in _ERR_ENGINE:
+            if rx.search(low):
+                hints = fp.setdefault("engine_hints", [])
+                if eng not in hints:
+                    hints.append(eng)
+                break
+        if (re.search(r"stack trace|traceback|fatal error|uncaught|on line \d+|\.php on line", low)
+                or any(rx.search(blob) for rx, _ in _PATH_OS[:5])):
+            verbose = True
+    if verbose:
+        out["EXPOSURE-ErrorLeak"] = {
+            "cve": "EXPOSURE-ErrorLeak", "name": "หน้า Error เปิดเผยข้อมูลภายใน (stack trace / path / เวอร์ชัน)",
+            "severity": "Low", "trigger": "หน้า error (404/400) แสดง stack trace / เส้นทางไฟล์ / เวอร์ชัน engine",
+            "host_check": "ตั้ง custom error page + ปิด display_errors (PHP) / APP_DEBUG=false — อย่าโชว์ debug บนโปรดักชัน",
+            "status": "vulnerable-conditions",
+            "reason": "หน้า error เปิดเผยข้อมูลที่ช่วยผู้โจมตี (เส้นทางไฟล์/OS/เวอร์ชัน engine/stack trace) ควรปิด debug และใช้ custom error page",
+        }
+    return out
+
+
 def _grab_banner(ip, port, timeout, probe=None):
     """เปิด TCP อ่าน banner บรรทัดแรก (pure-Python ไม่พึ่ง nmap/root) — '' ถ้าไม่ได้"""
     import socket
@@ -2291,6 +2386,8 @@ def _stack_profile(fp, cms_info):
         layers.append(f"OS: {osv}")
     if fp.get("server_family") and fp["server_family"] != "Unknown":
         layers.append(f"{fp['server_family']}" + (f"/{fp['server_version']}" if fp.get("server_version") else ""))
+    for eng in fp.get("engine_hints", []):
+        layers.append(f"engine: {eng}")
     for layer in fp.get("container_layers", []):
         layers.append(layer)
     if fp.get("php_versions"):
@@ -3745,6 +3842,8 @@ def scan_single_target(target_str, opts, idx=1, total=1):
     device_cves = _analyze_device(fp)
     component_cves = _analyze_components(fp)
     exposure_cves = _probe_exposures(session, base, path_prefix, opts["timeout"], fp=fp)
+    # ตรวจ error page (404/400) ดึง OS/engine/เวอร์ชัน/path ที่หน้าแรกมักซ่อน — เรียกก่อน _probe_os เพื่อให้ได้ประโยชน์
+    exposure_cves.update(_probe_error_pages(session, base, path_prefix, fp, opts["timeout"]))
     framework_cves = _probe_framework(session, base, path_prefix, fp, opts["timeout"])
     _detect_waf(fp)
     header_cves = _audit_security_headers(fp, base)
@@ -10856,8 +10955,14 @@ def ask(prompt, default=None, required=False, validator=None):
 
 
 def ask_yn(prompt, default=False):
+    global _NO_INTERACTIVE
+    if _NO_INTERACTIVE:
+        return default
     hint = " [Y/n]" if default else " [y/N]"
-    v = input(f"  {prompt}{hint}: ").strip().lower()
+    try:
+        v = input(f"  {prompt}{hint}: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return default
     if not v: return default
     return v in ("y", "yes", "ใช่", "k", "ครับ", "ค่ะ")
 
@@ -11233,6 +11338,9 @@ def select_cves_filter():
 
 def confirm_scan_scope(targets_desc, opts=None):
     """แสดง CVE + ตัวเลือกกรอง + ขอบเขต แล้วขอ confirm"""
+    global _NO_INTERACTIVE
+    if _NO_INTERACTIVE:
+        return True
     selected_cves = list(CVE_DATABASE)
     display_cve_list(verbose=False, cves=selected_cves)
 
@@ -12002,6 +12110,10 @@ Examples:
     ap.add_argument("--c99-key", default="", metavar="KEY",
                     help="API key สำหรับ c99.nl SubdomainFinder (เสริม — ครอบคลุมมาก)")
     ap.add_argument("--timeout", type=float, default=8.0)
+    ap.add_argument("--threads", type=int, default=10, help="Target scan threads (concurrency)")
+    ap.add_argument("--skip-lfi", action="store_true", help="Skip LFI testing")
+    ap.add_argument("--online-cve", action="store_true", help="Enable CIRCL CVE API online search")
+    ap.add_argument("--selected-cves", default="", help="Comma-separated CVE IDs to audit")
     ap.add_argument("--no-verify-ssl", action="store_true")
     ap.add_argument("--lan", action="store_true",
                     help="LAN mode: force internal-network accuracy (nmap -O/ARP OS + MAC/OUI vendor + "
@@ -12011,10 +12123,12 @@ Examples:
                          "(by default dead IPs with no open web port are skipped before deep scanning).")
     args = ap.parse_args()
 
-    global _OWN_TARGET, _SCAN_DEPTH, _SCAN_MAX_PAGES
+    global _OWN_TARGET, _SCAN_DEPTH, _SCAN_MAX_PAGES, _NO_INTERACTIVE
     _OWN_TARGET = args.i_own_this_target
+    _NO_INTERACTIVE = args.no_interactive
     _SCAN_DEPTH = max(1, min(args.depth, 20))
     _SCAN_MAX_PAGES = max(1, args.max_pages)
+    selected_cve_set = set(args.selected_cves.split(",")) if args.selected_cves else None
 
     if args.list_cves:
         banner()
@@ -12116,13 +12230,68 @@ Examples:
             return 1
         banner()
         display_cve_list(verbose=False)
-        target = args.pipeline if args.pipeline.startswith("http") else f"https://{args.pipeline}"
+        raw_pipeline = args.pipeline.strip()
+
+        opts = {"depth": _SCAN_DEPTH, "max_pages": _SCAN_MAX_PAGES, "timeout": args.timeout,
+                "target_threads": max(1, args.threads), "lfi_threads": min(5, max(1, args.threads)), "rate": 5.0,
+                "skip_lfi": args.skip_lfi, "verbose": False,
+                "selected_cves": selected_cve_set, "online_cve": args.online_cve,
+                "no_verify_ssl": args.no_verify_ssl, "lan_mode": args.lan, "discover": not args.no_discover}
+
+        # Case A: Target is a CIDR network range (e.g. 192.168.1.0/24)
+        if re.match(r'^\d+\.\d+\.\d+\.\d+/\d+$', raw_pipeline):
+            targets = resolve_cidr(raw_pipeline)
+            if not confirm_scan_scope(f"CIDR Pipeline: {raw_pipeline} ({len(targets)} hosts)"):
+                return 0
+            results = run_scan(targets, opts)
+            name = safe_name(raw_pipeline.replace("/", "_").replace(".", "_"))
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            json_path = unique_output_path(".", f"pipeline_cidr_{name}_{ts}", ".json")
+            with open(json_path, "w") as f:
+                json.dump({"scan_time": datetime.now().isoformat(), "target": raw_pipeline,
+                           "total_targets": len(results), "results": results, "scan_opts": opts, "tool_version": "RMUT CERT All-in-One v" + VERSION}, f,
+                          indent=2, ensure_ascii=False, default=list)
+            print(f"\n[1/2] JSON: {json_path}")
+            print(f"[2/2] Generating report ...")
+            result = run_generate_report(str(json_path), args.output_dir)
+            if result:
+                print(f"\n[+] PDF:   {result['pdf']}")
+                print(f"[+] Excel: {result.get('excel','')}")
+                print(f"[+] HTML:  {result.get('html','')}")
+                print(f"[+] Dir:   {result.get('out_dir','')}")
+            return 0
+
+        # Case B: Target is a file list (.txt, .csv)
+        elif os.path.isfile(raw_pipeline):
+            hosts, fstat = read_host_list_file(raw_pipeline)
+            if not hosts:
+                print("  ❌ ไม่พบโดเมน/IP ที่ถูกต้องในไฟล์")
+                return 1
+            targets = [(f"https://{h}", "filelist") for h in hosts]
+            if not confirm_scan_scope(f"File Pipeline: {Path(raw_pipeline).name} ({len(hosts)} hosts)"):
+                return 0
+            results = run_scan(targets, opts)
+            name = safe_name(Path(raw_pipeline).stem)
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            json_path = unique_output_path(".", f"pipeline_file_{name}_{ts}", ".json")
+            with open(json_path, "w") as f:
+                json.dump({"scan_time": datetime.now().isoformat(), "target": Path(raw_pipeline).name,
+                           "total_targets": len(results), "results": results, "scan_opts": opts, "tool_version": "RMUT CERT All-in-One v" + VERSION}, f,
+                          indent=2, ensure_ascii=False, default=list)
+            print(f"\n[1/2] JSON: {json_path}")
+            print(f"[2/2] Generating report ...")
+            result = run_generate_report(str(json_path), args.output_dir)
+            if result:
+                print(f"\n[+] PDF:   {result['pdf']}")
+                print(f"[+] Excel: {result.get('excel','')}")
+                print(f"[+] HTML:  {result.get('html','')}")
+                print(f"[+] Dir:   {result.get('out_dir','')}")
+            return 0
+
+        # Case C: Single Host/URL Target
+        target = raw_pipeline if raw_pipeline.startswith("http") else f"https://{raw_pipeline}"
         if not confirm_scan_scope(f"Target: {target}"):
             return 0
-        opts = {"depth": _SCAN_DEPTH, "max_pages": _SCAN_MAX_PAGES, "timeout": args.timeout,
-                "target_threads": 1, "lfi_threads": 5, "rate": 5.0,
-                "skip_lfi": False, "verbose": False,
-                "no_verify_ssl": args.no_verify_ssl, "lan_mode": args.lan, "discover": not args.no_discover}
         results = run_scan([(target, "single")], opts)
         r = results[0]
 

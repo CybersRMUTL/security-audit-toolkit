@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Error-page fingerprinting: deliberately triggers 404/400 pages and mines
+  them for OS/engine/version that a hardened home page hides — the Apache
+  default page's `Apache/2.4.41 (Ubuntu)` (server version + OS, high
+  confidence), stack-trace/path disclosure mapped to an OS (`/var/www` →
+  Linux, `C:\inetpub` → Windows/IIS, `/Users/` → macOS), leaked server
+  modules, PHP versions, and framework debug signatures (Laravel/Whoops,
+  Symfony, Django/Flask, Rails, ASP.NET, Tomcat, Spring Boot, Express). Runs
+  before the OS probe so the leak feeds OS detection, surfaces the engine in
+  the stack profile, and raises an EXPOSURE-ErrorLeak finding when a page
+  leaks internal detail.
 - ThaiCERT 8-group coverage enhancements:
   - **Group 1 (CMS):** Full detection and version extraction for Moodle (`/admin/environment.xml`, `/lib/upgrade.txt`, cookies and meta markers), along with EOL branch policies.
   - **Group 2 (Frameworks/APIs):** Fingerprinting for Yii and Slim frameworks, Yii Gii code generator exposure check (`?r=gii`), and mapping of exposed Laravel Ignition debug mode to `CVE-2021-3129` (Critical RCE).
