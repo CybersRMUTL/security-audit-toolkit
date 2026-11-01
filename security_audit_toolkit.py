@@ -6376,14 +6376,15 @@ def _thaicert_coverage(data):
             hit(2, host, _f2.title() if _f2 else "debug ที่เปิดทิ้ง", _fw_cves, hm)
         # 3) Hosting Control Panel
         _cp = next((c for c in CP3 if c in dev_l), "")
+        _cp_cves = [c for c in _pfx("DEVICE-") if any(k in c.lower() for k in CP3)]
         if _cp:
-            hit(3, host, device, _pfx("DEVICE-"), hm)
+            hit(3, host, device, _cp_cves or _pfx("DEVICE-"), hm)
         # 4) อุปกรณ์สำเร็จรูป / NAS / กล้อง / network
-        _dev_cves = _pfx("DEVICE-")
+        _appliance_cves = [c for c in _pfx("DEVICE-") if not any(k in c.lower() for k in CP3)]
         if device and not _cp:
-            hit(4, host, device, _dev_cves, hm)
-        elif _dev_cves:
-            hit(4, host, "", _dev_cves, hm)
+            hit(4, host, device, _appliance_cves, hm)
+        elif _appliance_cves:
+            hit(4, host, "", _appliance_cves, hm)
         if h.get("mac_vendor"):
             hit(4, host, "MAC→" + h["mac_vendor"], (), hm)
         # 5) Container / Docker (ชั้น edge ที่มองเห็น + พอร์ตเปิดเผย)
