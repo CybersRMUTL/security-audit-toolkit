@@ -5,6 +5,7 @@
 | ไฟล์ | สำหรับ | ทำอะไร |
 |------|--------|--------|
 | [`unlock-macos.command`](unlock-macos.command) | ผู้ใช้ปลายทาง (ฟรี) | ลบธง quarantine ของโฟลเดอร์ที่แตก zip แล้วเปิดแอป — **นำไปแนบในแพ็กเกจ `.zip` ของ macOS ได้** |
+| [`unlock-windows.bat`](unlock-windows.bat) | ผู้ใช้ปลายทาง (ฟรี) | ปลด Mark-of-the-Web ของทุกไฟล์ในโฟลเดอร์ แล้วเปิด `.exe` — **นำไปแนบในแพ็กเกจ `.zip` ของ Windows ได้** |
 | [`notarize-macos.sh`](notarize-macos.sh) | ผู้ build (ต้องมี Apple Developer) | codesign + notarize + staple ให้ `.app` → ผู้ใช้ดับเบิลคลิกเปิดได้เลย ไม่มีคำเตือน **(วิธีที่ถูกต้องถาวร)** |
 | [`sign-windows.ps1`](sign-windows.ps1) | ผู้ build (ต้องมี Code Signing cert) | เซ็น Authenticode ให้ `.exe` เพื่อลด/ตัด SmartScreen |
 
