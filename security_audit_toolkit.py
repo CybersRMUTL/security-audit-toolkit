@@ -1663,11 +1663,16 @@ def _probe_tls(host, port, timeout, fp=None):
         if ver is None:
             continue
         try:
+            import warnings
             c = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
             c.check_hostname = False
             c.verify_mode = ssl.CERT_NONE
-            c.minimum_version = ver
-            c.maximum_version = ver
+            # ตั้ง TLS 1.0/1.1 โดยตั้งใจเพื่อทดสอบว่าเซิร์ฟเวอร์ยังรับโปรโตคอลอ่อนไหม
+            # (Python เตือน deprecated — เป็นเรื่องปกติของการทดสอบนี้ จึงปิด warning เฉพาะจุด)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", DeprecationWarning)
+                c.minimum_version = ver
+                c.maximum_version = ver
             with _sk.create_connection((host, port), timeout=t) as s:
                 with c.wrap_socket(s, server_hostname=host) as ss:
                     neg = ss.version()
