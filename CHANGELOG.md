@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- IIS and LiteSpeed are now correlated with online CVEs: the detected server
+  version is fed into the CIRCL/NVD lookup (previously only NGINX/Apache were),
+  with CPE mappings for `microsoft/internet_information_services` and
+  `litespeedtech/litespeed_web_server`.
+- OS / distro end-of-life (EOL) detection — an offline check over the OS
+  fingerprint that flags unsupported systems (CentOS/RHEL 6/7/8, Windows Server
+  2003/2008/2012, Windows XP/Vista/7/8, old Ubuntu/Debian/FreeBSD) as a risk in
+  its own right, since EOL systems no longer receive security patches. Reported
+  under the OS/Kernel category with host-side confirmation guidance.
 - Open-source / free hosting control-panel detection (ThaiCERT group 3):
   HestiaCP, VestaCP, CyberPanel, aaPanel/BT-Panel, ISPConfig, ISPmanager,
   Froxlor, Ajenti, Webuzo, CentOS Web Panel (CWP), CloudPanel, Virtualmin,

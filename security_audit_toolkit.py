@@ -1919,6 +1919,50 @@ def _analyze_os_kernel(fp):
                       f"ตรวจจากภายนอกไม่ได้ ต้องเข้าไปตรวจ `uname -r` บนเครื่อง"}}
 
 
+# OS/distro ที่หมดอายุ (EOL) — ตรวจ offline จาก os fingerprint (best-effort; ควรยืนยันบนเครื่อง)
+# (regex ตรวจใน os text, label, เหตุผล, severity, status-bucket)
+OS_EOL_RULES = [
+    (r"\bcentos\b.*\b6\b|\bel6\b|rhel.*\b6\b", "CentOS/RHEL 6",
+     "EOL ตั้งแต่ 2020 — ไม่มีแพตช์แล้ว เสี่ยงสูง", "High", "high-risk"),
+    (r"\bcentos\b.*\b8\b|\bel8\b", "CentOS Linux 8",
+     "CentOS 8 EOL ธ.ค. 2021 (ถ้าเป็น RHEL/Rocky/Alma 8 ยังรองรับ — ยืนยันบนเครื่อง)", "High", "medium-risk"),
+    (r"\bcentos\b.*\b7\b|\bel7\b|rhel.*\b7\b", "CentOS/RHEL 7",
+     "CentOS 7 EOL มิ.ย. 2024 (RHEL 7 เหลือ ELS แบบจ่ายเงิน) — ควรอัปเกรด", "High", "medium-risk"),
+    (r"windows.*(server\s*)?2003|win\w*2003", "Windows Server 2003",
+     "EOL 2015 — เสี่ยงสูงมาก", "Critical", "high-risk"),
+    (r"windows.*(server\s*)?2008|win\w*2008", "Windows Server 2008/R2",
+     "EOL ม.ค. 2020 — ควรอัปเกรดหรือใช้ ESU", "High", "high-risk"),
+    (r"windows.*(server\s*)?2012|win\w*2012", "Windows Server 2012/R2",
+     "EOL ต.ค. 2023 — ควรอัปเกรดหรือใช้ ESU", "High", "medium-risk"),
+    (r"windows\s*xp|windows\s*vista|windows\s*7\b|windows\s*8(?!\.1)\b", "Windows เดสก์ท็อปรุ่นเก่า",
+     "Windows XP/Vista/7/8 EOL — เสี่ยงสูง", "High", "high-risk"),
+    (r"\bubuntu\b.*\b(1[02468]\.04|19\.\d+|21\.\d+|23\.\d+)\b", "Ubuntu รุ่นหมดอายุ",
+     "Ubuntu รุ่นนี้หมดอายุ — ใช้ LTS ที่ยังรองรับ (22.04/24.04)", "Medium", "medium-risk"),
+    (r"\b(wheezy|jessie|stretch|buster)\b|\bdebian\b.*\b([789]|10)\b", "Debian รุ่นเก่า",
+     "Debian ≤10 หมดอายุ/ใกล้หมด — ตรวจและอัปเกรด", "Medium", "medium-risk"),
+    (r"\bfreebsd\b.*\b(9|10|11)\b", "FreeBSD รุ่นเก่า",
+     "FreeBSD ≤11 หมดอายุ — อัปเกรด", "Medium", "medium-risk"),
+]
+
+
+def _analyze_os_eol(fp):
+    """ตรวจ OS/distro หมดอายุ (EOL) แบบ offline จาก os fingerprint — คืน {OS-EOL-*: finding}
+    EOL = ไม่ได้รับแพตช์ความปลอดภัยอีก (เป็นความเสี่ยงในตัว ไม่ต้องรอ CVE เฉพาะ)"""
+    txt = f"{fp.get('os', '')} {fp.get('os_source', '')} {fp.get('os_version', '')}".lower()
+    for rx, label, reason, sev, status in OS_EOL_RULES:
+        if re.search(rx, txt):
+            key = "OS-EOL-" + re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-")
+            return {key: {
+                "cve": key, "name": f"ระบบปฏิบัติการหมดอายุ (EOL): {label}", "severity": sev,
+                "trigger": f"ตรวจพบสัญญาณ {label} จาก OS fingerprint",
+                "host_check": "ยืนยันด้วย `cat /etc/os-release` (Linux) หรือ winver (Windows) "
+                              "แล้วอัปเกรดเป็นรุ่นที่ยังได้รับแพตช์ความปลอดภัย",
+                "status": status,
+                "reason": f"{reason} — OS ที่ EOL ไม่ได้รับแพตช์อีกต่อไป (ตรวจจากภายนอก ควรยืนยันบนเครื่อง)",
+            }}
+    return {}
+
+
 # OUI offline (เฉพาะ prefix ที่มั่นใจสูง — ที่เหลือใช้ macvendors.com ออนไลน์เติม)
 OUI_OFFLINE = {
     "001132": "Synology Incorporated", "0011d8": "ASUSTek",
@@ -2174,6 +2218,8 @@ CIRCL_MAP = {
     "PHP": ("php", "php"),
     "NGINX": ("nginx", "nginx"),
     "Apache": ("apache", "http_server"),
+    "IIS": ("microsoft", "internet_information_services"),
+    "LiteSpeed": ("litespeedtech", "litespeed_web_server"),
     "OpenSSL": ("openssl", "openssl"),
     "Synology DSM": ("synology", "diskstation_manager"),
     "QNAP QTS": ("qnap", "qts"),
@@ -2356,6 +2402,10 @@ def _online_cve_scan(fp, cms_info, opts):
         comps.append(("NGINX", _parse_ver(fp["nginx_version"])))
     elif fp.get("server_family") == "Apache" and fp.get("server_version"):
         comps.append(("Apache", _parse_ver(fp["server_version"])))
+    elif fp.get("server_family") == "IIS" and fp.get("server_version"):
+        comps.append(("IIS", _parse_ver(fp["server_version"])))
+    elif fp.get("server_family") == "LiteSpeed" and fp.get("server_version"):
+        comps.append(("LiteSpeed", _parse_ver(fp["server_version"])))
     if (fp.get("modules") or {}).get("OpenSSL"):
         comps.append(("OpenSSL", _parse_ver(fp["modules"]["OpenSSL"])))
     if fp.get("device") in CIRCL_MAP and fp.get("device_version"):
@@ -3605,6 +3655,7 @@ def scan_single_target(target_str, opts, idx=1, total=1):
     _probe_mac(_resolved_ip, fp, opts, lan=_lan)
     _sel0 = opts.get("selected_cves")
     oskernel_cves = _analyze_os_kernel(fp) if (not _sel0 or "CVE-2026-98432" in _sel0) else {}
+    oskernel_cves.update(_analyze_os_eol(fp))   # OS/distro หมดอายุ (EOL) — เตือนเสมอ
     fp["stack_layers"] = _stack_profile(fp, cms_info)
     _v and fp["stack_layers"] and print(f"    Stack: {' → '.join(fp['stack_layers'])}")
     online_cves = _online_cve_scan(fp, cms_info, opts)
@@ -3673,7 +3724,8 @@ def scan_single_target(target_str, opts, idx=1, total=1):
     if selected:
         all_r = [r for r in all_r if r.get("cve") in selected
                  or r.get("cve", "").startswith(("UNSUPPORTED-", "APP-", "DEVICE-", "COMP-",
-                                                  "EXPOSURE-", "FRAMEWORK-", "HEADER-", "TLS-", "ONLINE-"))]
+                                                  "EXPOSURE-", "FRAMEWORK-", "HEADER-", "TLS-",
+                                                  "ONLINE-", "OS-EOL-"))]
     vuln_cnt = sum(1 for r in all_r if r["status"] in ("vulnerable", "high-risk", "likely-vulnerable", "unpatched"))
     warn_cnt = sum(1 for r in all_r if r["status"] in ("medium-risk", "vulnerable-version", "vulnerable-conditions"))
     crit = vuln_cnt + warn_cnt
