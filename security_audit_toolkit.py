@@ -3853,6 +3853,7 @@ def scan_single_target(target_str, opts, idx=1, total=1):
         try:
             r_cve = session.get(base + path_prefix + "/?%ad-s", timeout=min(opts["timeout"], 4.0), allow_redirects=False)
             if r_cve.status_code == 200 and ("<code><span" in r_cve.text or "style=\"color: #" in r_cve.text or "class=\"html\"" in r_cve.text):
+                php_cves.pop("CVE-2024-4577", None)  # ยืนยันด้วย active probe แล้ว → ใช้ผลนี้ กันซ้ำกับผลเทียบเวอร์ชัน
                 win_php_cves["CVE-2024-4577"] = {
                     "cve": "CVE-2024-4577",
                     "name": "CVE-2024-4577 ยืนยันพบช่องโหว่ (PHP-CGI Argument Injection RCE)",
@@ -3909,6 +3910,7 @@ def scan_single_target(target_str, opts, idx=1, total=1):
         "framework_cves": framework_cves, "header_cves": header_cves,
         "tls_cves": tls_cves, "online_cves": online_cves,
         "oskernel_cves": oskernel_cves,
+        "win_php_cves": win_php_cves, "container_cves": container_cves,
         "summary": {"total_cves": len(all_r), "detected": crit,
                     "vulnerable": vuln_cnt, "warning": warn_cnt,
                     "critical": crit, "safe": safe, "unknown": unknown},
@@ -5902,6 +5904,10 @@ def _host_findings(h):
         out.append({**d, "category": "Online CVE", "target": tgt})
     for _cve, d in (h.get("oskernel_cves") or {}).items():
         out.append({**d, "category": "OS/Kernel", "target": tgt})
+    for _cve, d in (h.get("win_php_cves") or {}).items():
+        out.append({**d, "category": "PHP", "target": tgt})
+    for _cve, d in (h.get("container_cves") or {}).items():
+        out.append({**d, "category": "Container", "target": tgt})
     return out
 
 
@@ -7391,10 +7397,11 @@ def _build_pdf(data, charts, output_path, font):
 
         _CATO = {"NGINX": 0, "PHP": 1, "Node.js": 2, "GitLab": 3, "App": 4, "Device": 5,
                  "Component": 6, "Exposure": 7, "Framework": 8, "Headers": 9, "TLS": 10,
-                 "Online CVE": 11, "OS/Kernel": 12, "Other": 99}
+                 "Online CVE": 11, "OS/Kernel": 12, "Container": 13, "Other": 99}
         _CATC = {"NGINX": "N", "PHP": "P", "Node.js": "J", "GitLab": "G", "App": "A",
                  "Device": "D", "Component": "C", "Exposure": "E", "Framework": "F",
-                 "Headers": "H", "TLS": "T", "Online CVE": "O", "OS/Kernel": "K", "Other": "X"}
+                 "Headers": "H", "TLS": "T", "Online CVE": "O", "OS/Kernel": "K",
+                 "Container": "R", "Other": "X"}
         # รวบรวมคอลัมน์ CVE จากทุกโฮสต์ที่เข้าถึงได้
         _cvem = {}
         for _h in hs:
@@ -9682,9 +9689,9 @@ function togIPRow(uid){
 
 // ── 6. Dynamic Matrix (โฮสต์ × CVE) ──
 var MX_PFX = {'NGINX':'N','PHP':'P','Node.js':'J','GitLab':'G','App':'A','Device':'D',
-              'Component':'C','Exposure':'E','Framework':'F','Headers':'H','TLS':'T','Online CVE':'O','OS/Kernel':'K'};
+              'Component':'C','Exposure':'E','Framework':'F','Headers':'H','TLS':'T','Online CVE':'O','OS/Kernel':'K','Container':'R'};
 var MX_ORD = {'NGINX':0,'PHP':1,'Node.js':2,'GitLab':3,'App':4,'Device':5,'Component':6,
-              'Exposure':7,'Framework':8,'Headers':9,'TLS':10,'Online CVE':11,'OS/Kernel':12};
+              'Exposure':7,'Framework':8,'Headers':9,'TLS':10,'Online CVE':11,'OS/Kernel':12,'Container':13};
 function getAllCVEList(){
   const map = {};
   D.findings.forEach(f => {
