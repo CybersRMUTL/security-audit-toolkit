@@ -5574,6 +5574,8 @@ _CHARTJS_GZ_B64 = (
     "YQvjm12w+v8BgkoDLpcfAwA="
 )
 _CHARTJS_SRC = _gzip.decompress(_b64.b64decode("".join(_CHARTJS_GZ_B64.split()))).decode()
+# favicon โลโก้ CVE Scanner (48x48 PNG) ฝังใน HTML report
+_FAVICON_B64 = "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"
 
 # ---- โทนสีมาตรฐานของรายงาน (ใช้ร่วมกันทุกกราฟให้ดูเป็นชุดเดียว) ----
 PALETTE = {
@@ -8736,6 +8738,7 @@ def _build_html_dashboard(data, path):
     tmpl = r"""<!doctype html><html lang="th"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>RMUT CERT — แดชบอร์ดช่องโหว่</title>
+<link rel="icon" type="image/png" href="data:image/png;base64,__FAVICON__">
 <style>
 :root{--ink:#1a237e;--ink2:#283593;--vuln:#c0392b;--warn:#d35400;--unk:#6b7280;--safe:#1e7e34;
   --line:#dde1ed;--bg:#f4f6fb;--card:#fff;--muted:#6b7280;--dr-w:620px}
@@ -10776,6 +10779,7 @@ function tc8Open(no, idx){
 init();
 </script></body></html>"""
     out = (tmpl.replace("__CHARTJS__", _CHARTJS_SRC)
+               .replace("__FAVICON__", _FAVICON_B64)
                .replace("__PAYLOAD__", payload)
                .replace("__MATRIX__", matrix_html)
                .replace("__VC__", vc))

@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="docs/logo.png" alt="CVE Vulnerability Scanner — Security Audit Toolkit" width="480">
+
 # 🛡️ Security Audit Toolkit (RMUT CERT)
 
 **เครื่องมือตรวจหาช่องโหว่ + ยืนยันผล + ออกรายงาน แบบครบในตัวเดียว สำหรับทีม CERT**
