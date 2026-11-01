@@ -196,8 +196,13 @@ CVE_DATABASE = [
      "patched": "อัปเกรด GitLab เป็นรุ่นที่แก้แล้ว (ดู advisory ของ CVE)"},
     {"id": "CVE-2026-98432", "category": "OS/Kernel", "severity": "Critical",
      "name": "Linux Kernel TCP Use-After-Free (IPv4 options)",
-     "desc": "use-after-free ใน IPv4 TCP connection setup (race) — SYN ที่มี IPv4 options ไปพอร์ต TCP ที่ listen → RCE/DoS (CVSS 9.8, network, ไม่ต้องยืนยันตัวตน) กระทบ kernel 4.4+ ตรวจจากภายนอกไม่ได้ ต้องยืนยัน uname -r บนเครื่อง",
-     "patched": "อัปเดตเคอร์เนลเป็นรุ่นที่ดิสโทรแก้แล้ว (fix: commit e3f33b0a1d89) แล้วรีบูต หรือใช้ live-patch"},
+     "desc": ("use-after-free ใน IPv4 TCP connection setup (race) — SYN ที่มี IPv4 options "
+              "ไปพอร์ต TCP ที่ listen → RCE/DoS (CVSS 9.8, network, ไม่ต้องยืนยันตัวตน) "
+              "กระทบ kernel 4.4+ — ตรวจแบบ passive: ดู OS fingerprint, "
+              "ตรวจแบบ active: เปิด --mptcp-probe เพื่อ probe MPTCP listener "
+              "(เวกเตอร์ root exploit ที่สาธิตแล้ว)"),
+     "patched": ("อัปเดตเคอร์เนลเป็นรุ่นที่ดิสโทรแก้แล้ว (fix: commit e3f33b0a1d89) แล้วรีบูต "
+                 "หรือใช้ live-patch / ปิด MPTCP ชั่วคราว: sysctl -w net.mptcp.enabled=0")},
 ]
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -277,8 +282,14 @@ CONFIRM_OUTPUT = {
         "vuln": "เวอร์ชัน GitLab อยู่ในช่วงที่ได้รับผลกระทบ: 16.0.0–18.5.1 / 18.6.0–18.6.1 / 18.7.0 (ต่ำกว่า 18.5.2 / 18.6.2 / 18.7.1)",
         "safe": "เวอร์ชัน GitLab ≥ 18.5.2 / 18.6.2 / 18.7.1 แล้ว หรือไม่ได้มีการติดตั้ง GitLab บนเครื่องนี้ → ปลอดภัย"},
     "CVE-2026-98432": {
-        "vuln": "บนเครื่อง: `uname -r` แสดงเคอร์เนล Linux 4.4 ขึ้นไปที่ยังเป็นรุ่นก่อนแก้ (ยังไม่มี backport ของ commit e3f33b0a1d89 'ipv4: free inet_opt and ireq_opt after an RCU grace period' ตาม advisory ของดิสโทร) และเครื่องเปิดพอร์ต TCP ที่เข้าถึงจากเครือข่ายได้ → เข้าข่าย",
-        "safe": "เคอร์เนลอัปเดตเป็นรุ่นที่ดิสโทรแก้แล้ว (หรือใช้ live-patch) และรีบูตแล้ว, หรือระบบไม่ใช่ Linux → ปลอดภัย"},
+        "vuln": ("บนเครื่อง: `uname -r` แสดงเคอร์เนล Linux 4.4 ขึ้นไปที่ยังเป็นรุ่นก่อนแก้ "
+                 "(ยังไม่มี backport ของ commit e3f33b0a1d89 'ipv4: free inet_opt and ireq_opt after an RCU grace period' "
+                 "ตาม advisory ของดิสโทร) และเครื่องเปิดพอร์ต TCP ที่เข้าถึงจากเครือข่ายได้ → เข้าข่าย "
+                 "**หรือผล MPTCP probe จากภายนอกพบ MPTCP-ACTIVE บน listener** "
+                 "(เวกเตอร์ root exploit ที่สาธิตแล้ว)"),
+        "safe": ("เคอร์เนลอัปเดตเป็นรุ่นที่ดิสโทรแก้แล้ว (หรือใช้ live-patch) และรีบูตแล้ว, "
+                 "หรือระบบไม่ใช่ Linux → ปลอดภัย — **หรือ MPTCP-ACTIVE ไม่พบบนพอร์ตที่เปิดให้บริการ** "
+                 "(ปิดเวกเตอร์ root exploit ที่สาธิตไว้)")},
 
     # ── รุ่นหมดอายุ (Unsupported) ──
     "UNSUPPORTED-PHP": {
@@ -2091,11 +2102,117 @@ def _probe_os(host, fp, timeout, lan=False):
         pass
 
 
-def _analyze_os_kernel(fp):
+# ═══════════════════════════════════════════════════════════════════════
+# MPTCP Probe — Active Detection สำหรับ CVE-2026-98432
+# CVE-2026-98432 = Linux kernel IPv4 TCP Use-After-Free (CVSS 9.8, kernel 4.4+)
+# เวกเตอร์ที่สาธิตแล้ว = SYN + IPv4 options → TCP listener ที่เปิด MPTCP
+# การตรวจจากภายนอกทำได้ผ่าน socket.IPPROTO_MPTCP (ไม่ต้องใช้ username/password)
+# ═══════════════════════════════════════════════════════════════════════
+_MPTCP_PROBE_PORTS = [22, 80, 443, 21, 25, 8080, 8443, 3306, 5432, 6379, 27017]
+
+
+def _probe_mptcp_capability(host, port, timeout=3.0):
+    """ตรวจว่า TCP listener บน host:port เปิด MPTCP หรือไม่ (ไม่ต้อง auth)
+    คืน: True=MPTCP-ACTIVE · False=PLAIN-TCP · None=UNKNOWN (scanner ไม่รองรับ/timeout)
+
+    กลไก: สร้าง socket ด้วย IPPROTO_MPTCP (Linux kernel 5.6+) แล้ว connect → ถ้า MPTCP
+    เจรจาสำเร็จ จะอ่านค่า SOL_MPTCP/MPTCP_INFO ได้ · ถ้า ENOPROTOOPT = fallback TCP ปกติ
+    """
+    import socket as _sock
+    IPPROTO_MPTCP = getattr(_sock, "IPPROTO_MPTCP", 262)
+    SOL_MPTCP, MPTCP_INFO = 284, 1
+
+    try:
+        sock = _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM, IPPROTO_MPTCP)
+    except (AttributeError, OSError):
+        return None  # scanner ไม่รองรับ MPTCP
+
+    try:
+        sock.settimeout(timeout)
+        sock.connect((host, port))
+        try:
+            info = sock.getsockopt(SOL_MPTCP, MPTCP_INFO, 16)
+            if info and len(info) >= 16:
+                return True
+        except OSError:
+            pass
+        return False
+    except (_sock.timeout, ConnectionRefusedError, OSError):
+        return None
+    finally:
+        try:
+            sock.close()
+        except Exception:
+            pass
+
+
+def _scan_common_ports(host, ports=None, timeout=1.5, max_workers=16):
+    """TCP connect scan แบบเร็ว — คืน list ของพอร์ตที่เปิด (เรียงจากน้อยไปมาก)"""
+    import socket as _sock
+    if ports is None:
+        ports = _MPTCP_PROBE_PORTS
+
+    def _check(p):
+        s = _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM)
+        s.settimeout(timeout)
+        try:
+            return p, (s.connect_ex((host, p)) == 0)
+        except Exception:
+            return p, False
+        finally:
+            try:
+                s.close()
+            except Exception:
+                pass
+
+    open_ports = []
+    try:
+        with ThreadPoolExecutor(max_workers=min(max_workers, len(ports))) as ex:
+            for port, is_open in ex.map(_check, ports):
+                if is_open:
+                    open_ports.append(port)
+    except Exception:
+        pass
+    return sorted(open_ports)
+
+
+def _probe_mptcp_listeners(host, ports=None, timeout=3.0, scan_timeout=1.5, max_workers=8):
+    """ตรวจ MPTCP บนหลายพอร์ตพร้อมกัน — คืน {port: "MPTCP-ACTIVE"|"PLAIN-TCP"|"UNKNOWN"}
+    ถ้าไม่ระบุ ports จะ auto-scan หาพอร์ตที่เปิดก่อน"""
+    results = {}
+    if not ports:
+        ports = _scan_common_ports(host, timeout=scan_timeout)
+        if not ports:
+            return results
+
+    def _check(p):
+        try:
+            r = _probe_mptcp_capability(host, p, timeout)
+            return p, ("MPTCP-ACTIVE" if r is True else ("PLAIN-TCP" if r is False else "UNKNOWN"))
+        except Exception:
+            return p, "UNKNOWN"
+
+    try:
+        with ThreadPoolExecutor(max_workers=min(max_workers, len(ports))) as ex:
+            for port, status in ex.map(_check, ports):
+                results[port] = status
+    except Exception:
+        pass
+    return results
+
+
+def _analyze_os_kernel(fp, mptcp_results=None):
     """CVE-2026-98432 — Linux kernel IPv4 TCP use-after-free (CVSS 9.8, kernel 4.4+).
-    เป็นช่องโหว่ระดับเคอร์เนล มองผ่าน HTTP ไม่เห็น → ผูกกับผล OS fingerprint แล้วแจ้งให้ยืนยันบนเครื่อง
-    - Windows ชัดเจน → n/a (ไม่เกี่ยวข้อง)
-    - Linux หรือยังระบุ OS ไม่ได้ → unknown (อาจกระทบ ยืนยันแพตช์จากภายนอกไม่ได้)"""
+
+    ผสาน 2 ชั้นการตรวจ:
+      [PASSIVE] OS fingerprint — ระบุว่าเป็น Linux หรือไม่ (จาก header/banner/TTL/nmap)
+      [ACTIVE]  MPTCP probe — ตรวจ listener ที่เปิด MPTCP (เวกเตอร์ root exploit ที่สาธิตแล้ว)
+    สถานะ:
+      n/a                  — Windows ชัดเจน (ไม่ใช่ Linux)
+      likely-vulnerable    — พบ MPTCP-ACTIVE (เวกเตอร์ root exploit ใช้ได้จริง)
+      vulnerable-version   — Linux + MPTCP probe เจอ PLAIN-TCP ทั้งหมด
+      unknown              — Linux/ไม่ทราบ OS + ตรวจจากภายนอกไม่ได้ → ยืนยัน uname -r บนเครื่อง
+    """
     os_txt = f"{fp.get('os', '')} {fp.get('os_version', '')}".strip()
     low = os_txt.lower()
     base = {
@@ -2109,18 +2226,42 @@ def _analyze_os_kernel(fp):
     windows = any(k in low for k in ("windows", " iis", "win64", "win32")) or low.startswith("iis")
     linuxish = any(k in low for k in ("linux", "ubuntu", "debian", "centos", "rhel", "red hat",
                                       "alpine", "unix", "almalinux", "rocky", "amazon", "suse"))
+
     if windows and not linuxish:
         return {base["cve"]: {**base, "status": "n/a",
                 "reason": "OS ที่ตรวจพบไม่ใช่ Linux (Windows) — ช่องโหว่เคอร์เนล Linux นี้จึงไม่เกี่ยวข้อง"}}
+
     src = fp.get("os_source", "") or "ไม่ทราบแหล่ง"
     conf = fp.get("os_confidence", "") or "ไม่ระบุ"
-    if linuxish:
-        hint = f"ตรวจพบสัญญาณว่าเป็น Linux ({src} · ความเชื่อมั่น {conf})"
-    else:
-        hint = "ยังระบุ OS จากภายนอกไม่ได้ชัดเจน — หากเป็น Linux kernel 4.4+ จะเข้าข่าย"
+    hint = (f"ตรวจพบสัญญาณว่าเป็น Linux ({src} · ความเชื่อมั่น {conf})" if linuxish
+            else "ยังระบุ OS จากภายนอกไม่ได้ชัดเจน — หากเป็น Linux kernel 4.4+ จะเข้าข่าย")
+
+    mptcp_active, plain_tcp = [], []
+    for p, st in (mptcp_results or {}).items():
+        if st == "MPTCP-ACTIVE":
+            mptcp_active.append(p)
+        elif st == "PLAIN-TCP":
+            plain_tcp.append(p)
+
+    if mptcp_active:
+        ports_str = ", ".join(str(p) for p in sorted(mptcp_active))
+        return {base["cve"]: {**base, "status": "likely-vulnerable",
+                "reason": (f"{hint}. **ตรวจพบ MPTCP (Multipath TCP) เปิดอยู่บนพอร์ต {ports_str}** — "
+                           f"เวกเตอร์ที่สาธิตแล้วสำหรับช่องโหว่นี้ (SYN + IPv4 options → MPTCP listener) "
+                           f"กระทบ kernel 4.4+ (CVSS 9.8) ต้องยืนยัน `uname -r` บนเครื่องและอัปเดตเป็นรุ่นที่แก้แล้ว "
+                           f"(commit e3f33b0a1d89) หรือปิดชั่วคราว: `sysctl -w net.mptcp.enabled=0`")}}
+
+    if plain_tcp:
+        ports_str = ", ".join(str(p) for p in sorted(plain_tcp))
+        return {base["cve"]: {**base, "status": "vulnerable-version",
+                "reason": (f"{hint}. MPTCP probe บนพอร์ต {ports_str} → PLAIN-TCP ทั้งหมด "
+                           f"(เวกเตอร์ root exploit ที่สาธิตไว้ใช้ไม่ได้) แต่เคอร์เนลอาจยังมีช่องโหว่ (CVSS 9.8) "
+                           f"ต้องตรวจ `uname -r` และอัปเดตตาม advisory หรือปิด MPTCP: "
+                           f"`sysctl -w net.mptcp.enabled=0`")}}
+
     return {base["cve"]: {**base, "status": "unknown",
-            "reason": f"{hint}. เคอร์เนล 4.4+ เกือบทั้งหมดเข้าข่าย (CVSS 9.8) และ 'แพตช์แล้วหรือยัง' "
-                      f"ตรวจจากภายนอกไม่ได้ ต้องเข้าไปตรวจ `uname -r` บนเครื่อง"}}
+            "reason": (f"{hint}. เคอร์เนล 4.4+ เกือบทั้งหมดเข้าข่าย (CVSS 9.8) และ 'แพตช์แล้วหรือยัง' "
+                       f"ตรวจจากภายนอกไม่ได้ ต้องเข้าไปตรวจ `uname -r` บนเครื่อง")}}
 
 
 # OS/distro ที่หมดอายุ (EOL) — ตรวจ offline จาก os fingerprint (best-effort; ควรยืนยันบนเครื่อง)
@@ -3873,8 +4014,28 @@ def scan_single_target(target_str, opts, idx=1, total=1):
     _probe_os(urlparse(base).hostname or "", fp, opts["timeout"], lan=_lan)
     # MAC + ผู้ผลิต (เฉพาะเป้าหมายในวง LAN เดียวกัน — IP ส่วนตัว); โหมด LAN prime ARP + OUI เสมอ
     _probe_mac(_resolved_ip, fp, opts, lan=_lan)
+
+    # ── [ACTIVE] MPTCP probe — ตรวจ CVE-2026-98432 แบบไม่ต้องยืนยันตัวตน ──
+    mptcp_results = {}
     _sel0 = opts.get("selected_cves")
-    oskernel_cves = _analyze_os_kernel(fp) if (not _sel0 or "CVE-2026-98432" in _sel0) else {}
+    if opts.get("mptcp_probe") and (not _sel0 or "CVE-2026-98432" in _sel0):
+        _probe_host = urlparse(base).hostname or ""
+        if _probe_host:
+            _open_ports = _scan_common_ports(_probe_host, timeout=min(opts["timeout"], 1.5))
+            if _open_ports:
+                _v and print(f"    🔍 MPTCP probe: พอร์ตที่เปิด {_open_ports}")
+                mptcp_results = _probe_mptcp_listeners(
+                    _probe_host, _open_ports, timeout=min(opts["timeout"], 3.0))
+                _active = [p for p, s in mptcp_results.items() if s == "MPTCP-ACTIVE"]
+                _plain = [p for p, s in mptcp_results.items() if s == "PLAIN-TCP"]
+                if _active:
+                    _v and print(f"    🔴 MPTCP-ACTIVE: {_active} (CVE-2026-98432 vector พร้อมใช้)")
+                elif _plain:
+                    _v and print(f"    🟢 MPTCP: PLAIN-TCP ทั้งหมด ({len(_plain)} พอร์ต)")
+                else:
+                    _v and print(f"    ⚪ MPTCP: ตรวจไม่ได้ (scanner ไม่รองรับหรือ timeout)")
+
+    oskernel_cves = _analyze_os_kernel(fp, mptcp_results) if (not _sel0 or "CVE-2026-98432" in _sel0) else {}
     oskernel_cves.update(_analyze_os_eol(fp))   # OS/distro หมดอายุ (EOL) — เตือนเสมอ
     fp["stack_layers"] = _stack_profile(fp, cms_info)
     _v and fp["stack_layers"] and print(f"    Stack: {' → '.join(fp['stack_layers'])}")
@@ -11495,7 +11656,8 @@ def menu_scan():
     opts = {"depth": _SCAN_DEPTH, "max_pages": _SCAN_MAX_PAGES, "timeout": 8.0,
             "target_threads": 3, "lfi_threads": 5, "rate": 5.0,
             "skip_lfi": False, "verbose": False, "no_verify_ssl": False, "online_cve": False,
-            "lan_mode": False, "discover": (mode != "single")}
+            "lan_mode": False, "discover": (mode != "single"),
+            "mptcp_probe": False}
 
     opts["scan_mode"] = _scan_mode
 
@@ -11508,6 +11670,9 @@ def menu_scan():
         opts["skip_lfi"] = ask_yn("Skip LFI scan?", False)
         opts["verbose"] = ask_yn("Verbose?", False)
         opts["online_cve"] = ask_yn("ค้น CVE ออนไลน์ (CIRCL) ตามเวอร์ชันที่พบ? [ต้องต่อเน็ต]", False)
+        opts["mptcp_probe"] = ask_yn(
+            "เปิด MPTCP probe (active detection) สำหรับ CVE-2026-98432? "
+            "[ต้อง Linux kernel 5.6+ / Python 3.10+]", False)
         if mode != "single":
             opts["discover"] = ask_yn("Host discovery ก่อน (เคาะพอร์ตเว็บ ข้ามไอพีตาย — เร็วกว่ามากกับ CIDR)?", True)
 
@@ -11901,7 +12066,8 @@ def menu_pipeline():
     opts = {"depth": _SCAN_DEPTH, "max_pages": _SCAN_MAX_PAGES, "timeout": 8.0,
             "target_threads": default_threads, "lfi_threads": 5, "rate": 5.0,
             "skip_lfi": False, "verbose": False, "no_verify_ssl": False, "online_cve": False,
-            "lan_mode": False, "discover": (mode != "single")}
+            "lan_mode": False, "discover": (mode != "single"),
+            "mptcp_probe": False}
 
     opts["scan_mode"] = _scan_mode
 
@@ -11914,6 +12080,9 @@ def menu_pipeline():
         opts["skip_lfi"] = ask_yn("Skip LFI scan?", False)
         opts["verbose"] = ask_yn("Verbose?", False)
         opts["online_cve"] = ask_yn("ค้น CVE ออนไลน์ (CIRCL) ตามเวอร์ชันที่พบ? [ต้องต่อเน็ต]", False)
+        opts["mptcp_probe"] = ask_yn(
+            "เปิด MPTCP probe (active detection) สำหรับ CVE-2026-98432? "
+            "[ต้อง Linux kernel 5.6+ / Python 3.10+]", False)
 
     if not confirm_scan_scope(scope, opts):
         print(c("  ยกเลิก", C.YEL))
@@ -12136,6 +12305,10 @@ Examples:
     ap.add_argument("--no-discover", action="store_true",
                     help="Disable the fast TCP host-discovery pre-pass for CIDR/multi-host scans "
                          "(by default dead IPs with no open web port are skipped before deep scanning).")
+    ap.add_argument("--mptcp-probe", action="store_true",
+                    help="เปิด MPTCP probe (active detection) สำหรับ CVE-2026-98432 — "
+                         "ตรวจ listener ที่เปิด MPTCP บนพอร์ต 22/80/443/8080/8443/3306/5432 "
+                         "(ต้องใช้ Linux kernel 5.6+ และ Python 3.10+ บนเครื่องสแกน)")
     args = ap.parse_args()
 
     global _OWN_TARGET, _SCAN_DEPTH, _SCAN_MAX_PAGES, _NO_INTERACTIVE
@@ -12158,7 +12331,8 @@ Examples:
         opts = {"depth": _SCAN_DEPTH, "max_pages": _SCAN_MAX_PAGES, "timeout": args.timeout,
                 "target_threads": 1, "lfi_threads": 5, "rate": 5.0,
                 "skip_lfi": False, "verbose": False,
-                "no_verify_ssl": args.no_verify_ssl, "lan_mode": args.lan, "discover": not args.no_discover}
+                "no_verify_ssl": args.no_verify_ssl, "lan_mode": args.lan, "discover": not args.no_discover,
+                "mptcp_probe": args.mptcp_probe}
         results = run_scan([(args.target, "single")], opts)
         name = safe_name(args.target.replace("https://", "").replace("http://", "").replace("/", "_"))
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -12179,7 +12353,8 @@ Examples:
         opts = {"depth": _SCAN_DEPTH, "max_pages": _SCAN_MAX_PAGES, "timeout": args.timeout,
                 "target_threads": 3, "lfi_threads": 5, "rate": 5.0,
                 "skip_lfi": False, "verbose": False,
-                "no_verify_ssl": args.no_verify_ssl, "lan_mode": args.lan, "discover": not args.no_discover}
+                "no_verify_ssl": args.no_verify_ssl, "lan_mode": args.lan, "discover": not args.no_discover,
+                "mptcp_probe": args.mptcp_probe}
         results = run_scan(targets, opts)
         name = safe_name(args.cidr.replace("/", "_").replace(".", "_"))
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -12200,7 +12375,8 @@ Examples:
         opts = {"depth": _SCAN_DEPTH, "max_pages": _SCAN_MAX_PAGES, "timeout": args.timeout,
                 "target_threads": 5, "lfi_threads": 5, "rate": 5.0,
                 "skip_lfi": False, "verbose": False,
-                "no_verify_ssl": args.no_verify_ssl, "lan_mode": args.lan, "discover": not args.no_discover}
+                "no_verify_ssl": args.no_verify_ssl, "lan_mode": args.lan, "discover": not args.no_discover,
+                "mptcp_probe": args.mptcp_probe}
         results = run_scan(targets, opts)
         name = safe_name(args.wildcard.replace(".", "_"))
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -12227,7 +12403,8 @@ Examples:
         opts = {"depth": _SCAN_DEPTH, "max_pages": _SCAN_MAX_PAGES, "timeout": args.timeout,
                 "target_threads": 5, "lfi_threads": 5, "rate": 5.0,
                 "skip_lfi": False, "verbose": False,
-                "no_verify_ssl": args.no_verify_ssl, "lan_mode": args.lan, "discover": not args.no_discover}
+                "no_verify_ssl": args.no_verify_ssl, "lan_mode": args.lan, "discover": not args.no_discover,
+                "mptcp_probe": args.mptcp_probe}
         results = run_scan(targets, opts)
         name = safe_name(Path(args.listfile).stem)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -12251,7 +12428,8 @@ Examples:
                 "target_threads": max(1, args.threads), "lfi_threads": min(5, max(1, args.threads)), "rate": 5.0,
                 "skip_lfi": args.skip_lfi, "verbose": False,
                 "selected_cves": selected_cve_set, "online_cve": args.online_cve,
-                "no_verify_ssl": args.no_verify_ssl, "lan_mode": args.lan, "discover": not args.no_discover}
+                "no_verify_ssl": args.no_verify_ssl, "lan_mode": args.lan, "discover": not args.no_discover,
+                "mptcp_probe": args.mptcp_probe}
 
         # Case A: Target is a CIDR network range (e.g. 192.168.1.0/24)
         if re.match(r'^\d+\.\d+\.\d+\.\d+/\d+$', raw_pipeline):
