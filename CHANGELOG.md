@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- ThaiCERT 8-group coverage enhancements:
+  - **Group 1 (CMS):** Full detection and version extraction for Moodle (`/admin/environment.xml`, `/lib/upgrade.txt`, cookies and meta markers), along with EOL branch policies.
+  - **Group 2 (Frameworks/APIs):** Fingerprinting for Yii and Slim frameworks, Yii Gii code generator exposure check (`?r=gii`), and mapping of exposed Laravel Ignition debug mode to `CVE-2021-3129` (Critical RCE).
+  - **Group 5 (Containers) & Group 6 (Windows + PHP):** Active probes for unauthenticated Docker Daemon API (port 2375) and private Docker Registry v2 API (port 5000); detection for WampServer and Laragon Windows web stacks; and direct automatic risk and non-destructive syntax highlight probing for `CVE-2024-4577` (PHP-CGI Argument Injection RCE on Windows).
+  - **Group 7 (Test / Legacy / Backup):** Subdomain heuristics automatically classifying hosts matching `dev`, `uat`, `staging`, `test`, `dr`, `old`, `bak`, `temp`, `qa`, `lab` into Group 7, plus exposure probes for `/backup/`, `/old/`, and `/temp/` directory listings.
 - IIS and LiteSpeed are now correlated with online CVEs: the detected server
   version is fed into the CIRCL/NVD lookup (previously only NGINX/Apache were),
   with CPE mappings for `microsoft/internet_information_services` and

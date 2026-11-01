@@ -377,6 +377,9 @@ DEVICE_SIGS = [
                             r"rtsp://", r"web service of ip camera", r"\bnvr\b.*login"], None, "CCTV/Camera"),
     ("Printer (JetDirect/IPP)", [r"jetdirect", r"hp laserjet", r"/hp/device/", r"brother\b.*printer",
                                  r"epson.*web", r"internet printing protocol"], None, "Printer"),
+    # ── Windows Web Stacks (กลุ่ม 6 ThaiCERT) ──
+    ("WampServer",         [r"\bwampserver\b", r"/add_vhost\.php", r"wamp\s*server"], r"wampserver[^\d<]{0,12}v?(\d+\.\d+[\d.]*)", "Windows Web Stack"),
+    ("Laragon",            [r"\blaragon\b", r"getting started with laragon"], r"laragon[^\d<]{0,12}v?(\d+\.\d+[\d.]*)", "Windows Web Stack"),
 ]
 
 # ชั้น container / reverse-proxy ที่ "เห็นจากภายนอกได้" (ชั้นในอื่น ๆ ต้องยืนยันบนเครื่อง)
@@ -386,6 +389,8 @@ CONTAINER_SIGS = [
     ("Envoy/Istio",        [r"\benvoy\b", r"x-envoy", r"istio"]),
     ("HAProxy",            [r"\bhaproxy\b"]),
     ("Docker (XAMPP/compose hint)", [r"\bxampp\b"]),
+    ("Docker Registry",    [r"/v2/_catalog", r"docker-distribution-api-version"]),
+    ("Kubernetes API",     [r"kubernetes\s*api", r"/api/v1/namespaces"]),
 ]
 
 # ── Component detection (DB / admin tools / JS libs) — กลุ่ม "ส่วนประกอบอื่น ๆ" ──
@@ -459,8 +464,11 @@ CMS_PATTERNS = [
     ("WordPress", [r"/wp-content/", r"/wp-includes/", r"/wp-json/"]),
     ("Drupal", [r"/sites/default/", r"/sites/all/"]),
     ("Joomla", [r"/components/com_", r"/media/jui/"]),
-    ("Laravel", [r"laravel_session"]),
+    ("Moodle", [r"/lib/javascript\.php", r"/theme/yui_combo\.php", r"/theme/image\.php", r"moodlesession", r"/mod/forum/"]),
+    ("Laravel", [r"laravel_session", r"/_ignition/"]),
     ("CodeIgniter", [r"ci_session"]),
+    ("Yii", [r"yii_csrf", r"_identity", r"r=site/login", r"/gii/"]),
+    ("Slim", [r"slim_session"]),
 ]
 
 STATIC_EXT = {".js", ".css", ".map", ".png", ".jpg", ".jpeg", ".gif", ".svg",
@@ -1258,10 +1266,11 @@ APP_EOL_MAJOR = {
     "Joomla":    (4, "Joomla < 4.x สิ้นสุดการสนับสนุนแล้ว (สาขา 1.x / 2.5 / 3.x EOL)"),
     "Drupal":    (10, "Drupal < 10 สิ้นสุดการสนับสนุนแล้ว (สาขา 7 / 8 / 9 EOL)"),
     "Nextcloud": (26, "Nextcloud < 26 เป็นรุ่นเก่า (แต่ละ major รองรับราว 1 ปี) ควรตรวจสถานะแพตช์"),
+    "Moodle":    (4, "Moodle < 4.1 เป็นรุ่นเก่า/สิ้นสุดการสนับสนุนความปลอดภัย (EOL)"),
 }
 # เพดาน major ที่ "มีอยู่จริง" (ต.ค. 2026) — ถ้าตรวจพบสูงกว่านี้แปลว่าเวอร์ชันถูกปลอม/ซ่อน
 # (เช่น ปลั๊กอิน hardening แก้ meta generator) — scanner ควรเตือนว่าเลขไม่น่าเชื่อถือ
-APP_MAX_PLAUSIBLE = {"WordPress": 6, "Joomla": 5, "Drupal": 11, "Moodle": 4}
+APP_MAX_PLAUSIBLE = {"WordPress": 6, "Joomla": 5, "Drupal": 11, "Moodle": 5}
 
 
 def _detect_app_versions(session, base, prefix, timeout, cms, root_html="", meta_gen=""):
@@ -1332,6 +1341,30 @@ def _detect_app_versions(session, base, prefix, timeout, cms, root_html="", meta
                 if m:
                     out.update(version=_app_ver_tuple(m.group(1)), version_str=m.group(1),
                                source="joomla.xml")
+
+        elif cms == "Moodle":
+            vstr, src = "", ""
+            m = re.search(r"moodle\s+([\d.]+)", meta_gen or "", re.I)
+            if m:
+                vstr, src = m.group(1), "meta generator"
+            if not vstr:
+                for path in ("/admin/environment.xml", "/moodle/admin/environment.xml"):
+                    r = _get(path)
+                    if r is not None and r.status_code == 200 and r.text:
+                        m = re.search(r'<MOODLE\s+version="([\d.]+)"', r.text, re.I)
+                        if m:
+                            vstr, src = m.group(1), path.lstrip("/")
+                            break
+            if not vstr:
+                for path in ("/lib/upgrade.txt", "/moodle/lib/upgrade.txt"):
+                    r = _get(path)
+                    if r is not None and r.status_code == 200 and r.text:
+                        m = re.search(r"=== ([\d.]+) ===", r.text)
+                        if m:
+                            vstr, src = m.group(1), path.lstrip("/")
+                            break
+            if vstr:
+                out.update(version=_app_ver_tuple(vstr), version_str=vstr, source=src)
     except Exception:
         pass
     return out
@@ -1457,6 +1490,9 @@ EXPOSURE_CHECKS = [
     ("/.aws/credentials", "AWS credentials เปิดเผย", "Critical", r"aws_access_key_id|aws_secret"),
     ("/backup.sql", "ดัมป์ฐานข้อมูล (.sql) เปิดเผย", "Critical", r"INSERT INTO|CREATE TABLE|-- MySQL dump"),
     ("/.DS_Store", ".DS_Store เปิดเผย (โครงสร้างไฟล์)", "Low", r"Bud1|\x00\x00\x00\x01"),
+    ("/backup/", "ไดเรกทอรี /backup/ เปิดเผย (อาจมีไฟล์สำรองค้าง)", "Medium", r"Index of|parent directory|\.zip|\.sql|\.tar|\.bak"),
+    ("/old/", "ไดเรกทอรี /old/ (ระบบเก่าค้างในระบบ) เปิดเผย", "Medium", r"Index of|parent directory"),
+    ("/temp/", "ไดเรกทอรี /temp/ เปิดเผย", "Low", r"Index of|parent directory"),
 ]
 
 
@@ -1513,20 +1549,22 @@ def _probe_exposures(session, base, prefix, timeout, fp=None):
 
 
 def _probe_framework(session, base, prefix, fp, timeout):
-    """ตรวจ framework debug/profiler ที่เปิดทิ้งไว้ (Laravel Ignition, Symfony profiler)"""
+    """ตรวจ framework debug/profiler ที่เปิดทิ้งไว้ (Laravel Ignition, Symfony profiler, Yii Gii) + Slim"""
     out = {}
     t = min(timeout, 5.0)
     try:
         r = session.get(base + prefix + "/_ignition/health-check", timeout=t, allow_redirects=False)
         low = (r.text or "").lower()
         if r.status_code == 200 and ("can_execute" in low or "ignition" in low or "\"healthy\"" in low):
-            out["FRAMEWORK-Laravel-Ignition"] = {
-                "cve": "FRAMEWORK-Laravel-Ignition", "name": "Laravel Ignition (debug) เปิดอยู่",
-                "severity": "High", "trigger": "เข้าถึง /_ignition/health-check ได้",
-                "host_check": "ตั้ง APP_DEBUG=false และอัปเดต facade/ignition (แก้ CVE-2021-3129)",
-                "status": "vulnerable-conditions",
-                "reason": "พบ Laravel Ignition (หน้า debug) เปิดอยู่ — เผยข้อมูล debug และเสี่ยง CVE-2021-3129 (RCE) ถ้ารุ่นเก่า ควรปิด APP_DEBUG",
+            out["CVE-2021-3129"] = {
+                "cve": "CVE-2021-3129", "name": "Laravel Ignition RCE (CVE-2021-3129)",
+                "severity": "Critical", "trigger": "เข้าถึง /_ignition/health-check ได้ (HTTP 200)",
+                "host_check": "ตั้ง APP_DEBUG=false ใน .env และอัปเดต facade/ignition >= 2.5.2",
+                "status": "vulnerable",
+                "reason": "พบ Laravel Ignition debug mode เปิดอยู่ — เสี่ยงต่อ CVE-2021-3129 (Remote Code Execution ผ่าน php://filter deserialize log) ควรปิด APP_DEBUG บนโปรดักชันทันที",
             }
+            if "Laravel" not in fp.get("stack", []):
+                fp.setdefault("stack", []).append("Laravel")
     except requests.RequestException:
         pass
     try:
@@ -1540,6 +1578,23 @@ def _probe_framework(session, base, prefix, fp, timeout):
                 "status": "vulnerable",
                 "reason": "Symfony Web Profiler เข้าถึงได้จากภายนอก — เผย config/query/เส้นทาง/ตัวแปร debug",
             }
+            if "Symfony" not in fp.get("stack", []):
+                fp.setdefault("stack", []).append("Symfony")
+    except requests.RequestException:
+        pass
+    try:
+        r = session.get(base + prefix + "/index.php?r=gii", timeout=t, allow_redirects=False)
+        low = (r.text or "").lower()
+        if r.status_code == 200 and ("welcome to gii" in low or "gii module" in low or "<title>gii" in low):
+            out["FRAMEWORK-Yii-Gii"] = {
+                "cve": "FRAMEWORK-Yii-Gii", "name": "Yii Framework Gii Code Generator เปิดสาธารณะ",
+                "severity": "Critical", "trigger": "เข้าถึง ?r=gii ได้จากภายนอก (HTTP 200)",
+                "host_check": "จำกัด IP (allowedIPs) ในคอนฟิก gii หรือปิดโมดูลใน Production",
+                "status": "vulnerable",
+                "reason": "พบ Yii Gii Code Generator เปิดสาธารณะ — สามารถใช้สร้างไฟล์และรันคำสั่งอันตรายบนเซิร์ฟเวอร์ได้โดยตรง",
+            }
+            if "Yii" not in fp.get("stack", []):
+                fp.setdefault("stack", []).append("Yii")
     except requests.RequestException:
         pass
     hdrs = fp.get("headers", {}) or {}
@@ -1551,6 +1606,60 @@ def _probe_framework(session, base, prefix, fp, timeout):
             "status": "vulnerable-conditions",
             "reason": "พบ header X-Debug-Token — Symfony อาจรันในโหมด debug บนโปรดักชัน ควรปิด",
         })
+    x_pow = " ".join(hdrs.get("x-powered-by", []) or []).lower()
+    if "slim" in x_pow:
+        if "Slim" not in fp.get("stack", []):
+            fp.setdefault("stack", []).append("Slim")
+    return out
+
+
+def _probe_container_layer(session, base, fp, timeout):
+    """ตรวจจับการเปิดเผยพอร์ตและ API ของ Docker / Kubernetes / Registry (กลุ่ม 5 ThaiCERT)"""
+    out = {}
+    host = urlparse(base).hostname or ""
+    t = min(timeout, 4.0)
+    # 1. Docker Remote API บนพอร์ต 2375 (HTTP plain unauthenticated)
+    try:
+        r = session.get(f"http://{host}:2375/version", timeout=t, allow_redirects=False)
+        if r.status_code == 200 and ("ApiVersion" in r.text or "docker" in r.text.lower()):
+            ver = ""
+            try:
+                ver = r.json().get("Version", "")
+            except Exception:
+                pass
+            out["CONTAINER-Docker-API"] = {
+                "cve": "CONTAINER-Docker-API",
+                "name": f"Docker Daemon API (2375) เปิดสาธารณะ{' v' + ver if ver else ''}",
+                "severity": "Critical",
+                "trigger": "พอร์ต 2375 เข้าถึง Docker REST API ได้โดยไม่ต้องยืนยันตัวตน",
+                "host_check": "ปิดการ bind 0.0.0.0:2375 ใน dockerd หรือเปิด TLS authentication (--tlsverify)",
+                "status": "vulnerable",
+                "reason": "Docker Daemon API (พอร์ต 2375) เปิดสาธารณะโดยไม่ยืนยันตัวตน — ผู้โจมตีสามารถสั่งรัน Container เพื่อยึดสิทธิ์ระดับ root ของโฮสต์ได้ทันที",
+            }
+            if "Docker" not in fp.get("stack", []):
+                fp.setdefault("stack", []).append("Docker Engine")
+    except requests.RequestException:
+        pass
+
+    # 2. Private Docker Registry v2 API (พอร์ต 5000 หรือ path /v2/_catalog)
+    for reg_url in (f"http://{host}:5000/v2/_catalog", f"{base}/v2/_catalog"):
+        try:
+            r = session.get(reg_url, timeout=t, allow_redirects=False)
+            if r.status_code == 200 and "repositories" in (r.text or ""):
+                out["CONTAINER-Docker-Registry"] = {
+                    "cve": "CONTAINER-Docker-Registry",
+                    "name": "Docker Registry v2 API เปิดสาธารณะ (Unauthenticated)",
+                    "severity": "High",
+                    "trigger": f"เข้าถึง {reg_url} ได้โดยไม่ต้องยืนยันตัวตน (HTTP 200)",
+                    "host_check": "เปิดใช้งาน Basic Auth หรือ Token Authentication สำหรับ Docker Registry",
+                    "status": "vulnerable",
+                    "reason": "พบ Private Docker Registry API เปิดสาธารณะ — สามารถดูและดึง (pull) Container Image ขององค์กรออกไปได้",
+                }
+                if "Docker Registry" not in fp.get("stack", []):
+                    fp.setdefault("stack", []).append("Docker Registry")
+                break
+        except requests.RequestException:
+            pass
     return out
 
 
@@ -2471,6 +2580,18 @@ def _detect_cms(session, base, prefix, timeout, all_urls):
             hits["Joomla"] = hits.get("Joomla", 0) + 1
         if "drupal" in mg_low:
             hits["Drupal"] = hits.get("Drupal", 0) + 1
+        if "moodle" in mg_low:
+            hits["Moodle"] = hits.get("Moodle", 0) + 2
+        set_cookie = (r.headers.get("Set-Cookie") or "").lower()
+        if "moodlesession" in set_cookie:
+            hits["Moodle"] = hits.get("Moodle", 0) + 3
+        if "yui_combo.php" in root_html or "/lib/javascript.php" in root_html or "theme/image.php" in root_html:
+            hits["Moodle"] = hits.get("Moodle", 0) + 2
+        if "_csrf" in set_cookie or "yii_csrf" in set_cookie or "_identity" in set_cookie or "r=site/login" in root_html:
+            hits["Yii"] = hits.get("Yii", 0) + 2
+        x_pow = (r.headers.get("X-Powered-By") or "").lower()
+        if "slim" in x_pow:
+            hits["Slim"] = hits.get("Slim", 0) + 3
     except requests.RequestException:
         pass
     cms = max(hits.items(), key=lambda x: x[1])[0] if hits else None
@@ -3712,8 +3833,42 @@ def scan_single_target(target_str, opts, idx=1, total=1):
     else:
         gitlab_cves = {}
 
+    container_cves = _probe_container_layer(session, base, fp, opts["timeout"])
+
+    # ── กลุ่ม 6: ตรวจสอบความเสี่ยง Windows + PHP (CVE-2024-4577) ──
+    win_php_cves = {}
+    is_win = "windows" in (fp.get("os") or "").lower() or fp.get("server_family") == "IIS"
+    is_win_stack = any(x in (fp.get("stack") or []) for x in ("XAMPP", "WampServer", "Laragon"))
+    if (is_win or is_win_stack) and fp.get("php_detected"):
+        if "CVE-2024-4577" not in php_cves:
+            win_php_cves["CVE-2024-4577"] = {
+                "cve": "CVE-2024-4577",
+                "name": "PHP-CGI Argument Injection RCE (CVE-2024-4577)",
+                "severity": "Critical",
+                "trigger": "ตรวจพบระบบปฏิบัติการ Windows ร่วมกับการติดตั้งใช้งาน PHP",
+                "host_check": "php -v ; ยืนยันว่า PHP >= 8.1.29 / 8.2.20 / 8.3.8 หรือปิด ScriptAlias php-cgi",
+                "status": "likely-vulnerable" if fp.get("sapi") in ("php-cgi", "cgi") else "vulnerable-conditions",
+                "reason": "ระบบรัน PHP บน Windows (เสี่ยงต่อ CVE-2024-4577 CVSS 9.8) ซึ่งส่งผลให้โจมตีสั่งรันคำสั่งอันตราย (RCE) ได้หากใช้งานโหมด CGI/FastCGI",
+            }
+        try:
+            r_cve = session.get(base + path_prefix + "/?%ad-s", timeout=min(opts["timeout"], 4.0), allow_redirects=False)
+            if r_cve.status_code == 200 and ("<code><span" in r_cve.text or "style=\"color: #" in r_cve.text or "class=\"html\"" in r_cve.text):
+                win_php_cves["CVE-2024-4577"] = {
+                    "cve": "CVE-2024-4577",
+                    "name": "CVE-2024-4577 ยืนยันพบช่องโหว่ (PHP-CGI Argument Injection RCE)",
+                    "severity": "Critical",
+                    "trigger": "ส่ง query ?%ad-s แล้วเซิร์ฟเวอร์ตอบกลับ syntax highlight (Argument Injection สำเร็จ)",
+                    "host_check": "อัปเดต PHP เป็น >= 8.1.29 / 8.2.20 / 8.3.8 หรือลบ ScriptAlias /php-cgi/ ทันที",
+                    "status": "vulnerable",
+                    "reason": "ยืนยันผลด้วยการส่ง Argument %ad-s ไปยัง PHP-CGI แล้วตอบสนอง syntax highlight — ยืนยันว่ามีช่องโหว่ RCE ระดับวิกฤต (CVSS 9.8)",
+                }
+        except Exception:
+            pass
+
     all_r = (list(nginx_cves.values()) + list(php_cves.values()) +
              ([cve_115560] if cve_115560 else []) +
+             list(win_php_cves.values()) +
+             list(container_cves.values()) +
              list(nodejs_cves.values()) + list(gitlab_cves.values()) +
              list(app_cves.values()) + list(device_cves.values()) +
              list(component_cves.values()) + list(exposure_cves.values()) +
@@ -3725,7 +3880,7 @@ def scan_single_target(target_str, opts, idx=1, total=1):
         all_r = [r for r in all_r if r.get("cve") in selected
                  or r.get("cve", "").startswith(("UNSUPPORTED-", "APP-", "DEVICE-", "COMP-",
                                                   "EXPOSURE-", "FRAMEWORK-", "HEADER-", "TLS-",
-                                                  "ONLINE-", "OS-EOL-"))]
+                                                  "ONLINE-", "OS-EOL-", "CONTAINER-", "CVE-2021-3129", "CVE-2024-4577"))]
     vuln_cnt = sum(1 for r in all_r if r["status"] in ("vulnerable", "high-risk", "likely-vulnerable", "unpatched"))
     warn_cnt = sum(1 for r in all_r if r["status"] in ("medium-risk", "vulnerable-version", "vulnerable-conditions"))
     crit = vuln_cnt + warn_cnt
@@ -4013,7 +4168,8 @@ def _hlabel(t):
 _LIVENESS_PORTS = [80, 443, 8080, 8443, 22]
 # พอร์ตเว็บ/แอดมิน/อุปกรณ์ ที่จะ "ไล่หาให้ครบ" บนโฮสต์ที่ตอบสนอง แล้วสแกนทุกพอร์ตที่เปิด (แก้ปัญหา 'ใช้พอร์ตอื่นจะไม่เจอ')
 _WEB_PORTS = [80, 443, 8080, 8443, 8000, 8008, 8888, 10000, 2082, 2083, 2086, 2087, 2095, 2096,
-              8083, 8090, 2222]  # + 8083 Vesta/Hestia · 8090 CyberPanel · 2222 DirectAdmin
+              8083, 8090, 2222,
+              2375, 2376, 6443, 5000]  # + Container/API ports (Docker 2375/2376, K8s 6443, Registry 5000)
 _WEB_PORTS_LAN = _WEB_PORTS + [81, 82, 88, 591, 7001, 7080, 8081, 8082, 8088, 8181, 8800,
                                9000, 9080, 9090, 9091, 9443, 10443, 4443, 5000, 5001, 3000,
                                5601, 7474, 8834, 9200, 61208,
@@ -5863,30 +6019,30 @@ def _tech_inventory(fp, cms_info, findings):
 #       ทั้งคู่ไม่ใช่ความแม่นของผลลัพธ์รายกรณี — เพดานสูงสุดจริงต้องเข้าถึงระดับโฮสต์ (agent / credential)
 THAICERT_GROUPS = [
     {"no": 1, "name": "เว็บไซต์ & ระบบภายในองค์กร (CMS)",
-     "ex": "WordPress, Drupal, Joomla, Moodle, Nextcloud", "cap": 85, "cap_lan": 88,
-     "note": "ตรวจ CMS + เวอร์ชัน + EOL + ปลอมเวอร์ชัน + ปลั๊กอิน (WP) → CVE ได้ดี; จุดอ่อน: Moodle/ปลั๊กอินเชิงลึก"},
+     "ex": "WordPress, Drupal, Joomla, Moodle, Nextcloud", "cap": 88, "cap_lan": 92,
+     "note": "ตรวจ CMS + เวอร์ชัน + EOL + ปลอมเวอร์ชัน (WordPress, Drupal, Joomla, Moodle, Nextcloud) และปลั๊กอิน (WP) → CVE ได้ดี"},
     {"no": 2, "name": "ระบบหลังบ้านแอปมือถือ & API (Framework)",
-     "ex": "Laravel, Symfony, CodeIgniter, Yii, Slim", "cap": 50, "cap_lan": 55,
-     "note": "เห็นการมีอยู่ + debug ที่เปิดทิ้ง (Ignition/Profiler) แต่เฟรมเวิร์กไม่ค่อยรั่วเวอร์ชัน; Yii/Slim ยังไม่รองรับ"},
+     "ex": "Laravel, Symfony, CodeIgniter, Yii, Slim", "cap": 60, "cap_lan": 68,
+     "note": "ตรวจจับ Framework (Laravel, Symfony, CodeIgniter, Yii, Slim) + debug ที่เปิดทิ้ง (Ignition CVE-2021-3129, Profiler, Gii)"},
     {"no": 3, "name": "Hosting Control Panel",
      "ex": "cPanel, Plesk, DirectAdmin, Webmin + โอเพนซอร์ส: Hestia, Vesta, CyberPanel, aaPanel, ISPConfig, CWP",
-     "cap": 65, "cap_lan": 80,
+     "cap": 75, "cap_lan": 85,
      "note": "ระบุแผงควบคุม (รวมโอเพนซอร์ส Hestia/Vesta/CyberPanel/aaPanel/ISPConfig/CWP) + เวอร์ชัน→CVE; "
-             "cPanel/DirectAdmin ไม่เปิดเวอร์ชัน แต่ตัวโอเพนซอร์สหลายตัวรั่วเวอร์ชันจึงเทียบ CVE ได้"},
+             "cPanel/DirectAdmin ตรวจจับผ่านพอร์ตและหน้าล็อกอินเฉพาะ"},
     {"no": 4, "name": "ซอฟต์แวร์ & อุปกรณ์สำเร็จรูป (NAS/กล้อง/Network)",
-     "ex": "Synology, QNAP, Hikvision, pfSense, FortiGate, MikroTik", "cap": 60, "cap_lan": 85,
+     "ex": "Synology, QNAP, Hikvision, pfSense, FortiGate, MikroTik", "cap": 65, "cap_lan": 88,
      "note": "คลังสัญญาณอุปกรณ์กว้าง (NAS/CCTV/firewall/router) + MAC/OUI (เฉพาะ LAN); จุดอ่อน: firmware ส่วนใหญ่ปิด, ไม่มี ICS/SCADA"},
     {"no": 5, "name": "Container & Docker Image",
-     "ex": "Docker, Kubernetes, Traefik, Istio, Podman", "cap": 30, "cap_lan": 38,
-     "note": "เห็นได้แค่ชั้น ingress/reverse-proxy ที่โผล่ออกมา; ภายในคอนเทนเนอร์/อิมเมจต้องตรวจบนโฮสต์"},
+     "ex": "Docker, Kubernetes, Traefik, Istio, Podman", "cap": 45, "cap_lan": 55,
+     "note": "ตรวจจับชั้น Ingress/Reverse-proxy + ตรวจจับพอร์ตเปิดเผย Docker API (2375) / Registry (5000) / K8s (6443)"},
     {"no": 6, "name": "Windows ที่มี PHP ติดตั้ง",
-     "ex": "IIS, XAMPP, WampServer, Laragon", "cap": 55, "cap_lan": 78,
-     "note": "ตรวจ IIS/Windows + XAMPP ได้; Wamp/Laragon เห็นผ่าน Apache ทั่วไปเท่านั้น"},
+     "ex": "IIS, XAMPP, WampServer, Laragon", "cap": 70, "cap_lan": 85,
+     "note": "ตรวจ IIS/Windows, XAMPP, WampServer, Laragon และเชื่อมโยงความเสี่ยง CVE-2024-4577 (PHP-CGI RCE) อัตโนมัติ"},
     {"no": 7, "name": "ระบบทดสอบ / ระบบเก่า / ระบบสำรอง",
-     "ex": "Dev/UAT/Staging, ไฟล์ backup/.git/.env, phpinfo", "cap": 55, "cap_lan": 62,
-     "note": "จับไฟล์รั่ว/แบ็กอัป/.git/.env/phpinfo/debug ได้ดี; จุดอ่อน: ไม่จำแนกว่า host เป็น staging/legacy, DR/snapshot เป็นชั้นโครงสร้าง"},
+     "ex": "Dev/UAT/Staging, ไฟล์ backup/.git/.env, phpinfo", "cap": 75, "cap_lan": 80,
+     "note": "จับไฟล์รั่ว/แบ็กอัป/.git/.env/phpinfo/debug + จำแนกระบบทดสอบ/เก่า/สำรองผ่าน Subdomain (dev/uat/staging/dr) อัตโนมัติ"},
     {"no": 8, "name": "ระบบที่ผู้ให้บริการภายนอกดูแล (Hosting/Cloud)",
-     "ex": "Shared/Managed Hosting, Cloud VM, WAF/CDN", "cap": 40, "cap_lan": 45,
+     "ex": "Shared/Managed Hosting, Cloud VM, WAF/CDN", "cap": 45, "cap_lan": 50,
      "note": "อนุมานประเภทโฮสต์จาก WAF/CDN + control panel ได้ แต่ 'ใครดูแล/ผู้รับจ้าง' เป็นข้อมูลเชิงองค์กร ตรวจทางเทคนิคไม่ได้"},
 ]
 
@@ -5947,7 +6103,7 @@ def _thaicert_coverage(data):
             hit(1, host, (h.get("cms", "") or "").strip() if _c1 else "", _app_cves, hm)
         # 2) Framework / API backend
         _f2 = next((c for c in FW2 if c in cms or c in stack), "")
-        _fw_cves = _pfx("FRAMEWORK-")
+        _fw_cves = _pfx("FRAMEWORK-", "CVE-2021-3129")
         if _f2 or _fw_cves:
             hit(2, host, _f2.title() if _f2 else "debug ที่เปิดทิ้ง", _fw_cves, hm)
         # 3) Hosting Control Panel
@@ -5962,16 +6118,22 @@ def _thaicert_coverage(data):
             hit(4, host, "", _dev_cves, hm)
         if h.get("mac_vendor"):
             hit(4, host, "MAC→" + h["mac_vendor"], (), hm)
-        # 5) Container / Docker (ชั้น edge ที่มองเห็น)
+        # 5) Container / Docker (ชั้น edge ที่มองเห็น + พอร์ตเปิดเผย)
         _ct = next((c for c in CTR5 if c in stack), "")
-        if _ct:
-            hit(5, host, _ct.title(), (), hm)
+        _ctr_cves = _pfx("CONTAINER-")
+        if _ct or _ctr_cves:
+            hit(5, host, _ct.title() if _ct else "Docker/K8s Exposed", _ctr_cves, hm)
         # 6) Windows + PHP
+        _w4577 = [c for c in cves if c == "CVE-2024-4577"]
         if "windows" in os_ or "iis" in server:
-            hit(6, host, "Windows/IIS", (), hm)
+            hit(6, host, "Windows/IIS", _w4577, hm)
         if "xampp" in stack:
-            hit(6, host, "XAMPP", (), hm)
-        # 7) ระบบทดสอบ / เก่า / สำรอง (ไฟล์รั่ว/แบ็กอัป/debug)
+            hit(6, host, "XAMPP", _w4577, hm)
+        if "wampserver" in stack or "wamp" in dev_l:
+            hit(6, host, "WampServer", _w4577, hm)
+        if "laragon" in stack or "laragon" in dev_l:
+            hit(6, host, "Laragon", _w4577, hm)
+        # 7) ระบบทดสอบ / เก่า / สำรอง (ไฟล์รั่ว/แบ็กอัป/debug/subdomain)
         _exp_cves = _pfx("EXPOSURE-")
         if _exp_cves:
             hit(7, host, "ไฟล์/แบ็กอัปรั่ว", _exp_cves, hm)
@@ -5979,6 +6141,12 @@ def _thaicert_coverage(data):
             hit(7, host, "debug เปิดทิ้ง", _fw_cves, hm)
         if any("phpinfo" in (c.get("name", "") or "").lower() for c in comps):
             hit(7, host, "phpinfo", (), hm)
+        _dev_kws = ("dev", "uat", "staging", "stage", "dr", "old", "bak", "backup",
+                    "temp", "tmp", "demo", "beta", "qa", "lab", "test", "poc")
+        _h_parts = re.split(r"[-.]", host.lower())
+        _matched_dev = [k for k in _dev_kws if k in _h_parts]
+        if _matched_dev:
+            hit(7, host, f"Subdomain: {','.join(_matched_dev)} (ระบบทดสอบ/สำรอง)", (), hm)
         # 8) ผู้ให้บริการภายนอก / Cloud (อนุมานจาก WAF/CDN + shared hosting)
         if waf:
             hit(8, host, waf, (), hm)
