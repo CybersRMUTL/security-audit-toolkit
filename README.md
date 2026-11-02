@@ -1,9 +1,9 @@
 <div align="center">
 
 <p>
-  <img src="docs/ncsa-logo.png" alt="สำนักงานคณะกรรมการการรักษาความมั่นคงปลอดภัยไซเบอร์แห่งชาติ (สกมช. / NCSA)" height="80">
+  <img src="docs/ncsa-logo.png" alt="สำนักงานคณะกรรมการการรักษาความมั่นคงปลอดภัยไซเบอร์แห่งชาติ (สกมช. / NCSA)" height="120">
   &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
-  <img src="docs/rmut-logo.png" alt="มหาวิทยาลัยเทคโนโลยีราชมงคล (RMUT)" height="80">
+  <img src="docs/rmut-logo.png" alt="มหาวิทยาลัยเทคโนโลยีราชมงคล (RMUT)" height="120">
 </p>
 
 # Security Audit Toolkit
