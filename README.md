@@ -1,7 +1,5 @@
 <div align="center">
 
-<img src="docs/logo.png" alt="CVE Vulnerability Scanner — Security Audit Toolkit" width="480">
-
 <p>
   <img src="docs/ncsa-logo.png" alt="สำนักงานคณะกรรมการการรักษาความมั่นคงปลอดภัยไซเบอร์แห่งชาติ (สกมช. / NCSA)" height="80">
   &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
