@@ -2,7 +2,14 @@
 
 <img src="docs/logo.png" alt="CVE Vulnerability Scanner — Security Audit Toolkit" width="480">
 
-# 🛡️ Security Audit Toolkit (RMUT CERT)
+<p>
+  <img src="docs/ncsa-logo.png" alt="สำนักงานคณะกรรมการการรักษาความมั่นคงปลอดภัยไซเบอร์แห่งชาติ (สกมช. / NCSA)" height="80">
+  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+  <img src="docs/rmut-logo.png" alt="มหาวิทยาลัยเทคโนโลยีราชมงคล (RMUT)" height="80">
+</p>
+
+# Security Audit Toolkit
+### (NCSA + RMUT CERT)
 
 **เครื่องมือตรวจหาช่องโหว่ + ยืนยันผล + ออกรายงาน แบบครบในตัวเดียว สำหรับทีม CERT**
 
