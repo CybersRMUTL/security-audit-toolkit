@@ -6,6 +6,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+Accuracy pass over the analysis engine after 6.5.0. These fixes are already
+bundled in the refreshed v6.5.0 download assets and will roll into the next
+tagged release. They correct cases where the scanner reported the wrong result,
+without changing how it is used.
+
+### Fixed
+- **Node.js 24.x false positive** — 24.0.x is no longer flagged "unpatched";
+  all Node 24+ are treated as patched, matching the documented stance (the
+  version-branch map previously required ≥ 24.1.0).
+- **PHP 8.0/8.1 false positive** — these are no longer reported vulnerable to
+  the PHP 8.2+-only use-after-free CVEs (CVE-2026-109618 / 109619); their
+  end-of-life risk is still reported separately.
+- **Per-CVE Node.js matching** — each Node CVE now compares against its own
+  fixed-version branches, reducing false negatives on 18.x / 23.x branches that
+  had no backport for a given CVE.
+- **OS end-of-life regexes** — a minor version no longer trips the wrong rule:
+  CentOS 7.6 / 8.6 are classified as 7 / 8 (not the EOL-6 rule), and Debian 11.9
+  no longer matches the "≤ 10" rule.
+- **Version-range comparison** — version tuples are now zero-padded and keep all
+  components, fixing boundary cases (e.g. `16.0.0` vs `≤ 16.0`) and 4-part
+  versions (`22.2.10.33` vs `.34`) in GitLab / affected-range checks.
+- **Two-part PHP banners** — `PHP/8.2` (no patch digit) is now parsed and
+  analysed instead of being dropped.
+- **ThaiCERT grouping** — XAMPP is no longer double-counted into group 5
+  (Container); the control-panel / appliance split for group 3 no longer falls
+  back to the full `DEVICE-` CVE list.
+- **jQuery / Bootstrap mislabelling** — jQuery UI and plugins
+  (e.g. `jquery.fancybox…`) are no longer recorded as the jQuery *core* version;
+  a dedicated jQuery UI entry was added.
+- **CUPS detection** — device signatures are matched case-insensitively, so an
+  exposed CUPS print service is detected again.
+- **MPTCP probe** — now reads the MPTCP fallback flag, so a connection that fell
+  back to plain TCP is no longer reported as MPTCP-active (fewer false
+  kernel-CVE "likely-vulnerable" results).
+
+### Changed
+- **Frozen-build DNS robustness** — builds now collect dnspython submodules so
+  `dns.rdtypes.*` resolve when frozen; `dnspython` (and `fonttools`) added to the
+  Windows build requirements so DNS enumeration works in the packaged binary.
+- **Install guide** — distribution packages now ship a single consolidated
+  `HOW_TO_INSTALL.txt` instead of two separate guide files.
+
 ## [6.5.0] — 2026-11-01
 
 Backward compatible with 6.3.0 / 6.4.0: older scan JSON still loads, and the
