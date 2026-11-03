@@ -88,7 +88,7 @@ xattr -cr ~/Downloads/Security-Audit-Toolkit-v6.5 && open ~/Downloads/Security-A
 - ไปที่  **> System Settings → Privacy & Security** → เลื่อนลงหาข้อความ *"...was blocked"* → กด **Open Anyway** → ใส่รหัสเครื่อง
 
 > ⚠️ บน **macOS 15 (Sequoia) ขึ้นไป** การ **ดับเบิลคลิก** ไฟล์ `Unlock_Security.command` จะถูกบล็อกเช่นกัน (ตัวสคริปต์เองก็ติดธงกักกัน) — ถ้าจะใช้สคริปต์ ให้รันผ่าน Terminal ด้วย `bash ` แล้วลากไฟล์มาวาง
-> รายละเอียดเพิ่มเติมอยู่ในไฟล์ `HOW_TO_INSTALL_AND_FIX_SECURITY.txt` ที่แนบมา · 🔧 ผู้ดูแล/ผู้ build ดูวิธีตัดคำเตือนถาวร (notarize) ที่ [`scripts/`](scripts/)
+> รายละเอียดเพิ่มเติมอยู่ในไฟล์ `HOW_TO_INSTALL.txt` ที่แนบมา · 🔧 ผู้ดูแล/ผู้ build ดูวิธีตัดคำเตือนถาวร (notarize) ที่ [`scripts/`](scripts/)
 
 </details>
 
@@ -98,7 +98,7 @@ xattr -cr ~/Downloads/Security-Audit-Toolkit-v6.5 && open ~/Downloads/Security-A
 <br>
 
 1. คลิกขวาที่ไฟล์ `.zip` → **Extract All...** เพื่อแตกไฟล์
-2. เปิดโฟลเดอร์ที่แตกออกมา → ดับเบิลคลิกที่ **`Security_Audit_Toolkit.exe`**
+2. เปิดโฟลเดอร์ที่แตกออกมา → ดับเบิลคลิกที่ **`Security Audit Toolkit.exe`**
 3. **ครั้งแรก Windows SmartScreen อาจเตือน** "Windows protected your PC" — ให้คลิก **More info** → **Run anyway**
    - ถ้าถูกบล็อกหลายไฟล์ ดับเบิลคลิก **`Unlock_Security.bat`** ที่แนบมา เพื่อปลด Mark-of-the-Web ให้ทั้งหมด
 4. **ไม่ต้องติดตั้ง Python ใดๆ** — ไฟล์ `.exe` พกพาได้ นำไปใส่แฟลชไดรฟ์หรือส่งให้เครื่องอื่นเปิดได้ทันที
@@ -130,7 +130,7 @@ python3 security_audit_toolkit.py
 
 ## ✨ เครื่องมือนี้ทำอะไรได้
 
-- **🔍 สแกนช่องโหว่** — ตรวจ CVE หลัก 13 รายการ (**PHP, NGINX, Node.js, GitLab**) พร้อมฐานข้อมูล **CVE ตามช่วงเวอร์ชัน** และ **ค้นหา CVE ออนไลน์** (NVD / CIRCL) สำหรับ CMS / เว็บเซิร์ฟเวอร์ (IIS, LiteSpeed) และตรวจจับสัญญาณ LFI / path traversal
+- **🔍 สแกนช่องโหว่** — ตรวจ CVE หลัก 14 รายการ (**PHP, NGINX, Node.js, GitLab**) พร้อมฐานข้อมูล **CVE ตามช่วงเวอร์ชัน** และ **ค้นหา CVE ออนไลน์** (NVD / CIRCL) สำหรับ CMS / เว็บเซิร์ฟเวอร์ (IIS, LiteSpeed) และตรวจจับสัญญาณ LFI / path traversal
 - **🧭 โหมด LAN / External** — เลือกสแกนจากภายในเครือข่าย (แม่นยำกว่า: ตรวจ MAC/อุปกรณ์, พอร์ตกว้างขึ้น) หรือจากภายนอก โปรแกรมปรับโหมดอัตโนมัติเมื่อเป้าหมายเป็น IP ภายใน
 - **🖐️ ตรวจ OS / Engine หลายชั้น** — Server header → error page → SSH/service banner → nmap/TTL → MAC vendor พร้อมเตือน **OS ที่หมดอายุซัพพอร์ต (EOL)** และตรวจแผงควบคุมโฮสติ้งโอเพนซอร์ส (Hestia, Vesta, CyberPanel, aaPanel ฯลฯ)
 - **📋 รายงาน 8 กลุ่ม ThaiCERT / สกมช.** — จำแนกผลตามมาตรฐาน 8 กลุ่มระบบ พร้อมคลิก drill-down ดูรายละเอียดในรายงาน HTML
@@ -224,9 +224,9 @@ python3 security_audit_toolkit.py
 >
 > ส่วนเมนู 1–4 เหมาะเมื่อต้องการทำเฉพาะบางขั้นตอน (เช่น มีไฟล์ผลสแกนอยู่แล้ว อยากออกรายงานอย่างเดียว เลือกเมนู 4)
 
-### เมนู 1: ดูรายการ CVE ที่ตรวจสอบ (13 รายการ)
+### เมนู 1: ดูรายการ CVE ที่ตรวจสอบ (14 รายการ)
 
-แสดงรายการช่องโหว่ทั้ง 13 รายการ พร้อมรายละเอียดชื่อ CVE ระดับความรุนแรง กลไกการโจมตี และเวอร์ชันที่ได้รับการแก้ไข (Patched Version) เพื่อใช้เป็นข้อมูลอ้างอิงก่อนทดสอบ
+แสดงรายการช่องโหว่ทั้ง 14 รายการ พร้อมรายละเอียดชื่อ CVE ระดับความรุนแรง กลไกการโจมตี และเวอร์ชันที่ได้รับการแก้ไข (Patched Version) เพื่อใช้เป็นข้อมูลอ้างอิงก่อนทดสอบ
 
 ### เมนู 2: Scan - สแกนหาช่องโหว่ (Vulnerability Scanner)
 
