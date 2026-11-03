@@ -75,16 +75,11 @@ try:
 except ImportError:
     HAS_REPORTLAB = False
 
-try:
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    from matplotlib import font_manager
-    HAS_MPL = True
-except Exception:
-    # matplotlib อาจ import ไม่ได้แม้ติดตั้งแล้ว เช่น บั๊ก font cache บน macOS (KeyError '_items')
-    # ไม่ปล่อยให้โปรแกรมล้ม — จะใช้การวาดกราฟในตัว (ReportLab) แทนโดยอัตโนมัติ
-    HAS_MPL = False
+# ReportLab built-in vector charting engine is used for instant, crisp PDF reports
+# without slow system font cache scanning.
+HAS_MPL = False
+plt = None
+font_manager = None
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -352,7 +347,7 @@ DEVICE_SIGS = [
     ("Sophos",             [r"\bsophos\b"], None, "Firewall"),
     ("Ubiquiti UniFi",     [r"\bunifi\b", r"ubiquiti"], None, "Network"),
     ("MikroTik RouterOS",  [r"mikrotik", r"routeros"], r"RouterOS[ /]+([\d.]+)", "Network"),
-    ("CUPS Printer",       [r"\bCUPS\b", r"\bIPP/"], r"CUPS/([\d.]+)", "Printer"),
+    ("CUPS Printer",       [r"\bcups\b", r"\bipp/"], r"CUPS/([\d.]+)", "Printer"),
     ("cPanel",             [r"\bcpanel\b", r"x-cpanel"], None, "Control Panel"),
     ("Plesk",              [r"\bplesk\b"], r"Plesk[ /]+v?([\d.]+)", "Control Panel"),
     ("DirectAdmin",        [r"directadmin"], None, "Control Panel"),
@@ -434,11 +429,12 @@ TOOL_SIGS = [
 ]
 # JavaScript libraries ฝั่ง client (มี CVE ของตัวเอง เช่น jQuery เก่า XSS) — จาก asset URL/ความคิดเห็นใน JS
 JSLIB_SIGS = [
-    ("jQuery", r"jquery[.\-/]?(?:ui[.\-]?)?v?(\d+\.\d+\.\d+)(?:\.min)?\.js"),
-    ("jQuery", r"jquery[^\"'<>]{0,40}?[?&]ver=(\d+\.\d+\.\d+)"),
+    ("jQuery", r"jquery[.\-/]?v?(\d+\.\d+\.\d+)(?:\.min)?\.js"),
+    ("jQuery", r"jquery(?:-core)?(?:\.min)?\.js[?&]ver=(\d+\.\d+\.\d+)"),
+    ("jQuery UI", r"jquery[.\-]ui[.\-/]?v?(\d+\.\d+\.\d+)(?:\.min)?\.js"),
     ("jQuery", r"/\*!?\s*jQuery\s+v(\d+\.\d+\.\d+)"),
     ("Bootstrap", r"bootstrap[.\-/]?v?(\d+\.\d+\.\d+)(?:\.min)?\.(?:js|css)"),
-    ("Bootstrap", r"bootstrap[^\"'<>]{0,40}?[?&]ver=(\d+\.\d+\.\d+)"),
+    ("Bootstrap", r"bootstrap(?:\.min)?\.(?:js|css)[?&]ver=(\d+\.\d+\.\d+)"),
     ("Vue", r"vue[.\-/]?v?(\d+\.\d+\.\d+)(?:\.min)?\.js"),
     ("React", r"react[.\-/]?v?(\d+\.\d+\.\d+)(?:\.min)?\.js"),
     ("AngularJS", r"angular[.\-/]?v?(\d+\.\d+\.\d+)(?:\.min)?\.js"),
@@ -506,7 +502,7 @@ SESSION_PATHS = ["/var/lib/php/sessions/sess_{sid}", "/tmp/sess_{sid}",
                  "/var/lib/php/sess_{sid}", "/var/lib/php7/sess_{sid}",
                  "/var/lib/php8/sess_{sid}"]
 
-VERSION_RE = re.compile(r"PHP/(\d+\.\d+\.\d+)")
+VERSION_RE = re.compile(r"PHP/(\d+\.\d+(?:\.\d+)?)")
 NGINX_VER_RE = re.compile(r"(?:nginx|openresty)/(\d+\.\d+\.\d+)", re.I)
 NODE_VER_RE = re.compile(
     r"(?:node(?:\.js)?[ /v]+v?|nodejs_version_info\{[^}]*version=\"v?|"
@@ -518,7 +514,7 @@ NEXT_VER_RE = re.compile(
 )
 UNDICI_VER_RE = re.compile(r"undici[ /v]+v?(\d+\.\d+\.\d+)", re.I)
 
-NODEJS_PATCHED = {18: (18, 20, 8), 20: (20, 19, 2), 22: (22, 15, 1), 23: (23, 11, 1), 24: (24, 1, 0)}
+NODEJS_PATCHED = {18: (18, 20, 8), 20: (20, 19, 2), 22: (22, 15, 1), 23: (23, 11, 1), 24: (24, 0, 0)}
 
 # ═══════════════════════════════════════════════════════════════════════
 # End-of-Life (สิ้นสุดการสนับสนุนด้านความปลอดภัย) — ตรวจรุ่นที่หมดอายุแล้ว
@@ -810,8 +806,9 @@ def safe_name(text):
 
 
 def parse_semver(v):
-    m = re.match(r"(\d+)\.(\d+)\.(\d+)", v or "")
-    return tuple(int(x) for x in m.groups()) if m else None
+    # รองรับทั้ง 3 ส่วน (8.2.3) และ 2 ส่วน (8.2 → เติม patch=0) เพื่อไม่ทิ้งเวอร์ชันจาก banner แบบย่อ
+    m = re.match(r"(\d+)\.(\d+)(?:\.(\d+))?", v or "")
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3) or 0)) if m else None
 
 
 def in_range(ver, lo, hi):
@@ -822,7 +819,7 @@ def classify_php(vt):
     major, minor, patch = vt
     if major > 8: return "patched"
     if major < 8: return "n/a"          # PHP 5.x/7.x ไม่ได้รับผลกระทบ — CVE-2026-109618/119 เฉพาะ PHP 8.2+
-    if minor < 2: return "vulnerable"   # PHP 8.0/8.1 อาจกระทบแต่ EOL แล้ว ไม่มี patch ให้
+    if minor < 2: return "n/a"          # PHP 8.0/8.1 อยู่นอกขอบเขต CVE-2026-109618/119 (เฉพาะ 8.2+) — ความเสี่ยง EOL รายงานแยกต่างหาก
     key = (8, minor)
     if key in PHP_PATCHED:
         return "patched" if patch >= PHP_PATCHED[key] else "unpatched"
@@ -841,6 +838,23 @@ def classify_nodejs(vt):
     if major in NODEJS_PATCHED:
         return "patched" if vt >= NODEJS_PATCHED[major] else "unpatched"
     return "vulnerable"
+
+
+def _classify_nodejs_cve(vt, patched=None):
+    """จำแนกต่อ CVE โดยใช้รุ่นที่แก้เฉพาะของ CVE นั้น (patched: {major: (x,y,z)})
+    แก้ปัญหา verdict เดียวใช้กับทุก CVE ที่มีรุ่นแก้คนละ branch — ลด false negative บน Node 18.x/23.x"""
+    if not patched:
+        return classify_nodejs(vt)
+    if not vt or len(vt) < 3:
+        return "unknown"
+    major = vt[0]
+    if major in patched:
+        return "patched" if tuple(vt) >= patched[major] else "unpatched"
+    if major > max(patched):          # รุ่นใหม่กว่าทุก branch ที่ต้องแก้ → ปลอดภัย
+        return "patched"
+    if major in (19, 21):             # รุ่นเลขคี่ EOL
+        return "vulnerable"
+    return "unpatched"                # branch เก่าที่ไม่มีรุ่นแก้เฉพาะให้ → ถือว่ายังกระทบ (ตรวจยืนยันบนเครื่อง)
 
 
 def hash_body(text):
@@ -1530,33 +1544,44 @@ def _probe_exposures(session, base, prefix, timeout, fp=None):
     — ยืนยันด้วย validator กันผลบวกปลอม คืน {EXPOSURE-<slug>: finding}
     ถ้า composer.lock เปิดเผย → แยกแพ็กเกจเก็บใน fp['composer_packages'] ให้ online lookup เทียบ CVE"""
     out = {}
-    t = min(timeout, 5.0)
-    for path, name, sev, validator in EXPOSURE_CHECKS:
+    t = min(timeout, 3.5)
+
+    def _check(item):
+        path, name, sev, validator = item
         try:
             r = session.get(base + prefix + path, timeout=t, allow_redirects=False)
-        except requests.RequestException:
-            continue
-        if r.status_code != 200:
-            continue
-        full = r.text or ""
-        body = full[:8000]
-        if validator and not re.search(validator, body, re.I):
-            continue
-        slug = path.strip("/").replace("/", "-").replace(".", "")
-        key = f"EXPOSURE-{slug}"
-        reason = f"เข้าถึง {path} ได้ (HTTP 200) — {name} ควรปิดและตรวจสอบว่าถูกเข้าถึงไปแล้วหรือไม่"
-        if path == "/composer.lock" and fp is not None:
-            pkgs = _parse_composer_lock(full)
-            if pkgs:
-                fp["composer_packages"] = pkgs
-                reason += f" | แยกได้ {len(pkgs)} แพ็กเกจ (จะเทียบ CVE ถ้าเปิด online lookup)"
-        out[key] = {
-            "cve": key, "name": name, "severity": sev,
-            "trigger": f"เข้าถึง {path} ได้จากภายนอก (HTTP 200 + ยืนยันเนื้อหา)",
-            "host_check": f"ปิดการเข้าถึง {path} ที่ web server (deny/location) และหมุนเวียน secret ที่รั่วทันที",
-            "status": "vulnerable",
-            "reason": reason,
-        }
+            if r.status_code == 200:
+                full = r.text or ""
+                body = full[:8000]
+                if not validator or re.search(validator, body, re.I):
+                    return path, name, sev, full
+        except Exception:
+            pass
+        return None
+
+    try:
+        with ThreadPoolExecutor(max_workers=min(10, len(EXPOSURE_CHECKS))) as ex:
+            for res in ex.map(_check, EXPOSURE_CHECKS):
+                if not res:
+                    continue
+                path, name, sev, full = res
+                slug = path.strip("/").replace("/", "-").replace(".", "")
+                key = f"EXPOSURE-{slug}"
+                reason = f"เข้าถึง {path} ได้ (HTTP 200) — {name} ควรปิดและตรวจสอบว่าถูกเข้าถึงไปแล้วหรือไม่"
+                if path == "/composer.lock" and fp is not None:
+                    pkgs = _parse_composer_lock(full)
+                    if pkgs:
+                        fp["composer_packages"] = pkgs
+                        reason += f" | แยกได้ {len(pkgs)} แพ็กเกจ (จะเทียบ CVE ถ้าเปิด online lookup)"
+                out[key] = {
+                    "cve": key, "name": name, "severity": sev,
+                    "trigger": f"เข้าถึง {path} ได้จากภายนอก (HTTP 200 + ยืนยันเนื้อหา)",
+                    "host_check": f"ปิดการเข้าถึง {path} ที่ web server (deny/location) และหมุนเวียน secret ที่รั่วทันที",
+                    "status": "vulnerable",
+                    "reason": reason,
+                }
+    except Exception:
+        pass
     return out
 
 
@@ -2082,7 +2107,8 @@ def _probe_os(host, fp, timeout, lan=False):
             pass
     # 3) TTL heuristic — โหมด LAN เชื่อมั่นสูงขึ้นมากเพราะ 0–1 hop (initial TTL เกือบตรงเป๊ะ)
     try:
-        r = subprocess.run(["ping", "-c", "1", host], capture_output=True, text=True, timeout=4)
+        cmd_ping = ["ping", "-n", "1", host] if sys.platform == "win32" else ["ping", "-c", "1", host]
+        r = subprocess.run(cmd_ping, capture_output=True, text=True, timeout=3)
         tm = re.search(r"ttl[=\s]+(\d+)", r.stdout or "", re.I)
         if tm:
             ttl = int(tm.group(1))
@@ -2119,8 +2145,10 @@ def _probe_mptcp_capability(host, port, timeout=3.0):
     เจรจาสำเร็จ จะอ่านค่า SOL_MPTCP/MPTCP_INFO ได้ · ถ้า ENOPROTOOPT = fallback TCP ปกติ
     """
     import socket as _sock
+    import struct as _struct
     IPPROTO_MPTCP = getattr(_sock, "IPPROTO_MPTCP", 262)
     SOL_MPTCP, MPTCP_INFO = 284, 1
+    MPTCP_INFO_FLAG_FALLBACK = 0x1  # _BITUL(0) จาก linux/mptcp.h — ตั้งเมื่อ connection ถอยไปเป็น TCP ธรรมดา
 
     try:
         sock = _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM, IPPROTO_MPTCP)
@@ -2131,12 +2159,21 @@ def _probe_mptcp_capability(host, port, timeout=3.0):
         sock.settimeout(timeout)
         sock.connect((host, port))
         try:
-            info = sock.getsockopt(SOL_MPTCP, MPTCP_INFO, 16)
-            if info and len(info) >= 16:
-                return True
+            # struct mptcp_info: 6×__u8 (offset 0-5) + padding 2 ไบต์ → __u32 mptcpi_flags ที่ offset 8
+            # (ขอ buffer เผื่อ struct รุ่นใหม่ที่ยาวกว่าเดิม; เคอร์เนลคืนเท่าที่มี)
+            info = sock.getsockopt(SOL_MPTCP, MPTCP_INFO, 128)
         except OSError:
-            pass
-        return False
+            # getsockopt(MPTCP_INFO) ล้มเหลว = ไม่ได้เจรจา MPTCP บน connection นี้ → PLAIN-TCP
+            return False
+        if not info or len(info) < 12:
+            return False
+        try:
+            flags = _struct.unpack_from("@I", info, 8)[0]
+        except Exception:
+            # parse struct ไม่ได้ (เคอร์เนล layout ต่างจากที่คาด) → ไม่ยืนยัน (กันรายงานปลอม)
+            return None
+        # MPTCP จริงก็ต่อเมื่อ "ไม่" ติดธง fallback (ไม่งั้นถึงจะได้ struct มา ก็คือถอยเป็น TCP แล้ว)
+        return not bool(flags & MPTCP_INFO_FLAG_FALLBACK)
     except (_sock.timeout, ConnectionRefusedError, OSError):
         return None
     finally:
@@ -2267,11 +2304,11 @@ def _analyze_os_kernel(fp, mptcp_results=None):
 # OS/distro ที่หมดอายุ (EOL) — ตรวจ offline จาก os fingerprint (best-effort; ควรยืนยันบนเครื่อง)
 # (regex ตรวจใน os text, label, เหตุผล, severity, status-bucket)
 OS_EOL_RULES = [
-    (r"\bcentos\b.*\b6\b|\bel6\b|rhel.*\b6\b", "CentOS/RHEL 6",
+    (r"\bcentos\D*6\b|\bel6\b|\brhel\D*6\b", "CentOS/RHEL 6",
      "EOL ตั้งแต่ 2020 — ไม่มีแพตช์แล้ว เสี่ยงสูง", "High", "high-risk"),
-    (r"\bcentos\b.*\b8\b|\bel8\b", "CentOS Linux 8",
+    (r"\bcentos\D*8\b|\bel8\b", "CentOS Linux 8",
      "CentOS 8 EOL ธ.ค. 2021 (ถ้าเป็น RHEL/Rocky/Alma 8 ยังรองรับ — ยืนยันบนเครื่อง)", "High", "medium-risk"),
-    (r"\bcentos\b.*\b7\b|\bel7\b|rhel.*\b7\b", "CentOS/RHEL 7",
+    (r"\bcentos\D*7\b|\bel7\b|\brhel\D*7\b", "CentOS/RHEL 7",
      "CentOS 7 EOL มิ.ย. 2024 (RHEL 7 เหลือ ELS แบบจ่ายเงิน) — ควรอัปเกรด", "High", "medium-risk"),
     (r"windows.*(server\s*)?2003|win\w*2003", "Windows Server 2003",
      "EOL 2015 — เสี่ยงสูงมาก", "Critical", "high-risk"),
@@ -2283,9 +2320,9 @@ OS_EOL_RULES = [
      "Windows XP/Vista/7/8 EOL — เสี่ยงสูง", "High", "high-risk"),
     (r"\bubuntu\b.*\b(1[02468]\.04|19\.\d+|21\.\d+|23\.\d+)\b", "Ubuntu รุ่นหมดอายุ",
      "Ubuntu รุ่นนี้หมดอายุ — ใช้ LTS ที่ยังรองรับ (22.04/24.04)", "Medium", "medium-risk"),
-    (r"\b(wheezy|jessie|stretch|buster)\b|\bdebian\b.*\b([789]|10)\b", "Debian รุ่นเก่า",
+    (r"\b(wheezy|jessie|stretch|buster)\b|\bdebian\D*(?:[789]|10)\b", "Debian รุ่นเก่า",
      "Debian ≤10 หมดอายุ/ใกล้หมด — ตรวจและอัปเกรด", "Medium", "medium-risk"),
-    (r"\bfreebsd\b.*\b(9|10|11)\b", "FreeBSD รุ่นเก่า",
+    (r"\bfreebsd\D*(?:9|10|11)\b", "FreeBSD รุ่นเก่า",
      "FreeBSD ≤11 หมดอายุ — อัปเกรด", "Medium", "medium-risk"),
 ]
 
@@ -2765,37 +2802,50 @@ def _online_cve_scan(fp, cms_info, opts):
         if comp.get("version") and comp.get("name") in CIRCL_MAP:
             comps.append((comp["name"], _parse_ver(comp["version"])))
 
-    timeout = min(float(opts.get("timeout", 8.0)) + 5, 15)
+    timeout = min(float(opts.get("timeout", 8.0)), 6.0)
+    cve_tasks = []
     for name, vt in comps:
         mapping = CIRCL_MAP.get(name)
-        if not mapping or not vt:
-            continue
-        for f in _circl_cves(mapping[0], mapping[1], vt, timeout=timeout):
-            out.setdefault(f["cve"], f)
+        if mapping and vt:
+            cve_tasks.append((mapping[0], mapping[1], vt, 8, None, None))
 
-    # composer.lock packages (ถ้าเปิดเผย) — เวอร์ชันเป๊ะทุก dependency → เทียบ CVE
-    # CPE ของ composer package ไม่สม่ำเสมอ จึงเป็น best-effort (บางตัว match เช่น laravel/symfony/phpmailer)
-    for pkg in (fp.get("composer_packages") or [])[:40]:
+    for pkg in (fp.get("composer_packages") or [])[:20]:
         pvt = _parse_ver(pkg.get("version"))
         nm = pkg.get("name", "")
-        if not pvt or "/" not in nm:
-            continue
-        vendor, _, product = nm.partition("/")
-        for f in _circl_cves(vendor, product, pvt, timeout=timeout, cap=3):
-            f = dict(f)
-            f["name"] = f"{f['_real_cve']} — {nm}"
-            f["reason"] = f"แพ็กเกจ {nm} {pkg['version']}: " + f["reason"]
-            out.setdefault(f["cve"], f)
+        if pvt and "/" in nm:
+            vendor, _, product = nm.partition("/")
+            cve_tasks.append((vendor, product, pvt, 3, nm, pkg.get("version")))
 
-    # plugin (WordPress) — best-effort: ปลั๊กอินมี CPE ไม่สม่ำเสมอใน free source
-    # จึงลองแบบ wordpress/<slug_underscore> และจำกัดจำนวน (กันยิงเยอะ/ช้า)
-    for p in (app.get("plugins") or [])[:8]:
+    for p in (app.get("plugins") or [])[:6]:
         pvt = _parse_ver(p.get("version"))
-        if not pvt:
-            continue
-        slug_us = p["slug"].replace("-", "_")
-        for f in _circl_cves("wordpress", slug_us, pvt, timeout=timeout, cap=3):
-            out.setdefault(f["cve"], f)
+        if pvt:
+            slug_us = p["slug"].replace("-", "_")
+            cve_tasks.append(("wordpress", slug_us, pvt, 3, None, None))
+
+    def _worker(task):
+        vendor, product, vt, cap, nm, pkg_ver = task
+        try:
+            res = _circl_cves(vendor, product, vt, timeout=timeout, cap=cap)
+            if nm and pkg_ver and res:
+                out_res = []
+                for f in res:
+                    f = dict(f)
+                    f["name"] = f"{f['_real_cve']} — {nm}"
+                    f["reason"] = f"แพ็กเกจ {nm} {pkg_ver}: " + f["reason"]
+                    out_res.append(f)
+                return out_res
+            return res
+        except Exception:
+            return []
+
+    if cve_tasks:
+        try:
+            with ThreadPoolExecutor(max_workers=min(6, len(cve_tasks))) as ex:
+                for flist in ex.map(_worker, cve_tasks):
+                    for f in (flist or []):
+                        out.setdefault(f["cve"], f)
+        except Exception:
+            pass
     return out
 
 
@@ -2852,7 +2902,7 @@ def _detect_session(session, base, prefix, endpoints, timeout):
     return {"session_used": False, "evidence": []}
 
 
-def _crawl(session, base, prefix, max_depth, max_pages, timeout, verbose=False, crawl_budget=30, fp=None):
+def _crawl(session, base, prefix, max_depth, max_pages, timeout, verbose=False, crawl_budget=15, fp=None):
     start = base + prefix + "/"
     _t0 = time.time()
     origin = f"{urlparse(start).scheme}://{urlparse(start).netloc}"
@@ -2906,8 +2956,12 @@ def _crawl(session, base, prefix, max_depth, max_pages, timeout, verbose=False, 
         pass
 
     while queue and len(visited) < max_pages and (time.time() - _t0) < crawl_budget:
+        if len(endpoints) >= 6 and len(visited) >= 15:
+            break  # ได้ endpoints และพารามิเตอร์เพียงพอสำหรับการทดสอบเชิงลึกแล้ว
         if len(visited) >= 20 and not endpoints:
             break  # เว็บ CMS ที่ไม่มีพารามิเตอร์/ฟอร์ม — ไม่มีจุดทดสอบ LFI หยุดเร็วเพื่อไม่ให้ค้าง
+        if len(visited) > 0 and len(visited) % 5 == 0 and verbose:
+            print(f"    🕷️ สำรวจโครงสร้างเว็บ: {len(visited)}/{max_pages} หน้า (พบ {len(endpoints)} endpoints)...", flush=True)
         url, depth = queue.pop(0)
         if url in visited or depth > max_depth: continue
         p = urlparse(url)
@@ -3444,14 +3498,20 @@ def _analyze_115560(fp, pc):
     return r
 
 
+# หมายเหตุ: `patched` = รุ่นที่แก้แล้วแยกตาม branch ของแต่ละ CVE (major → (x,y,z))
+# branch ที่ "ไม่อยู่ในรายการ" และเก่ากว่ารุ่นที่แก้ล่าสุด จะถูกตีความแบบระวังไว้ก่อนว่า "ยังกระทบ" (ตรวจยืนยันบนเครื่อง)
 NODEJS_CVES = {
     "CVE-2026-105482": {"name": "Node.js DNS NUL Domain Bypass", "severity": "High",
+        "patched": {18: (18, 20, 8), 20: (20, 19, 2), 22: (22, 15, 1), 23: (23, 11, 1)},
         "host_check": "node -v   # ตรวจรุ่น Node.js (ต้อง >= 18.20.8 / 20.19.2 / 22.15.1 / 23.11.1) และ c-ares"},
     "CVE-2026-105483": {"name": "Node.js TLS Cert Validation (Unicode IP)", "severity": "High",
+        "patched": {20: (20, 19, 2), 22: (22, 15, 1)},
         "host_check": "node -v   # ตรวจรุ่น Node.js ที่แก้การตรวจใบรับรอง TLS (>= 20.19.2 / 22.15.1)"},
     "CVE-2026-106069": {"name": "Node.js TLS Identity Bypass (non-standard IP)", "severity": "High",
+        "patched": {20: (20, 19, 2), 22: (22, 15, 1)},
         "host_check": "node -v   # ตรวจรุ่น Node.js ที่แก้ checkServerIdentity (>= 20.19.2 / 22.15.1)"},
     "CVE-2026-111497": {"name": "Node.js Brotli OOB Write (RCE)", "severity": "Critical",
+        "patched": {20: (20, 19, 2), 22: (22, 15, 1), 23: (23, 11, 1)},
         "host_check": "node -v   # ตรวจรุ่น Node.js (>= 20.19.2 / 22.15.1 / 23.11.1) และการบีบอัด Brotli (zlib/undici)"},
 }
 NODEJS_SIGNS = ("express", "next.js", "nextjs", "nuxt", "fastify", "koa",
@@ -3642,7 +3702,7 @@ def _analyze_nodejs(fp, node_info=None):
         # 1) กรณีสกัดเลขเวอร์ชัน Node.js ได้ชัดเจน
         if vers:
             ver_str = vers[0]
-            v_cls = classify_nodejs(parse_semver(ver_str))
+            v_cls = _classify_nodejs_cve(parse_semver(ver_str), meta.get("patched"))
             if v_cls == "patched":
                 r["status"] = "patched"
                 r["reason"] = f"ตรวจพบ Node.js {ver_str} ({fw_label}) แพตช์แล้ว"
@@ -3740,7 +3800,7 @@ GITLAB_HDR_SIGNS = ("gitlab", "x-gitlab", "_gitlab_session")
 
 def _ver_tuple(v):
     try:
-        return tuple(int(x) for x in re.findall(r"\d+", v)[:3])
+        return tuple(int(x) for x in re.findall(r"\d+", v))
     except Exception:
         return ()
 
@@ -3760,13 +3820,13 @@ def _ver_in_affected(ver, spec):
         if results and all(x is False for x in results):
             return False
         return None
-    if "lt" in spec and not (vt <  _ver_tuple(spec["lt"])):
+    if "lt" in spec and not (_vcmp(vt, _ver_tuple(spec["lt"])) <  0):
         return False
-    if "le" in spec and not (vt <= _ver_tuple(spec["le"])):
+    if "le" in spec and not (_vcmp(vt, _ver_tuple(spec["le"])) <= 0):
         return False
-    if "ge" in spec and not (vt >= _ver_tuple(spec["ge"])):
+    if "ge" in spec and not (_vcmp(vt, _ver_tuple(spec["ge"])) >= 0):
         return False
-    if "gt" in spec and not (vt >  _ver_tuple(spec["gt"])):
+    if "gt" in spec and not (_vcmp(vt, _ver_tuple(spec["gt"])) >  0):
         return False
     return True
 
@@ -3915,7 +3975,7 @@ def _analyze_gitlab(fp, gl):
 
         verdict = _ver_in_affected(ver, meta.get("affected"))
         eol_before = meta.get("eol_before", "")
-        ver_is_eol = bool(ver and eol_before and _ver_tuple(ver) < _ver_tuple(eol_before))
+        ver_is_eol = bool(ver and eol_before and _vcmp(_ver_tuple(ver), _ver_tuple(eol_before)) < 0)
         if verdict is True:
             r["status"] = "vulnerable" if surfaces else "likely-vulnerable"
             r["reason"] = f"พบ GitLab เวอร์ชัน {ver} ({ev}) อยู่ในช่วงที่ได้รับผลกระทบ (< {meta.get('fixed')}) · พื้นผิว: {surf_txt}"
@@ -3969,11 +4029,13 @@ def scan_single_target(target_str, opts, idx=1, total=1):
           (f" {fp['server_version']}" if fp["server_version"] else "") +
           f" | SAPI: {fp['sapi']} | PHP: {', '.join(sorted(fp['php_versions'])) or '?'}")
 
+    _v and print("    🕷️ เริ่มสำรวจโครงสร้างเว็บไซต์ (Crawling)...", flush=True)
     endpoints, visited, baseline_hash, baseline_status, all_urls = _crawl(
         session, base, path_prefix, opts["depth"], opts["max_pages"],
-        opts["timeout"], opts.get("verbose"), opts.get("crawl_budget", 30), fp=fp)
-    _v and print(f"    Crawl: {len(visited)} pages, {len(endpoints)} endpoints")
+        opts["timeout"], _v, opts.get("crawl_budget", 8), fp=fp)
+    _v and print(f"    ✅ Crawl สำเร็จ: {len(visited)} pages, {len(endpoints)} endpoints")
 
+    _v and print("    🔍 กำลังตรวจสอบ CMS, Exposures & Frameworks...", flush=True)
     cms_info = _detect_cms(session, base, path_prefix, opts["timeout"], all_urls)
     if cms_info.get("cms") in ("WordPress", "Drupal", "Joomla", "Nextcloud"):
         fp["php_detected"] = True
@@ -4065,6 +4127,7 @@ def scan_single_target(target_str, opts, idx=1, total=1):
 
     lfi_results = []
     if not opts.get("skip_lfi") and endpoints:
+        _v and print(f"    🧪 กำลังทดสอบ LFI & Web Vulnerabilities ({len(endpoints)} endpoints)...", flush=True)
         lfi_results = _lfi_scan(session, base, endpoints, baseline_hash,
                                   opts["timeout"], opts["rate"], opts["lfi_threads"])
         if lfi_results:
@@ -6345,7 +6408,7 @@ def _thaicert_coverage(data):
     CP3 = ("cpanel", "plesk", "directadmin", "webmin", "hestia", "vesta", "cyberpanel",
            "aapanel", "bt-panel", "ispconfig", "ispmanager", "froxlor", "ajenti", "webuzo",
            "centos web panel", "cwp", "cloudpanel", "virtualmin", "keyhelp", "sentora", "zpanel")
-    CTR5 = ("traefik", "kubernetes", "k8s", "envoy", "istio", "haproxy", "docker", "xampp")
+    CTR5 = ("traefik", "kubernetes", "k8s", "envoy", "istio", "haproxy", "docker")
     for h in data.get("hosts", []):
         if not h.get("reachable"):
             continue
@@ -6378,7 +6441,7 @@ def _thaicert_coverage(data):
         _cp = next((c for c in CP3 if c in dev_l), "")
         _cp_cves = [c for c in _pfx("DEVICE-") if any(k in c.lower() for k in CP3)]
         if _cp:
-            hit(3, host, device, _cp_cves or _pfx("DEVICE-"), hm)
+            hit(3, host, device, _cp_cves, hm)
         # 4) อุปกรณ์สำเร็จรูป / NAS / กล้อง / network
         _appliance_cves = [c for c in _pfx("DEVICE-") if not any(k in c.lower() for k in CP3)]
         if device and not _cp:
@@ -11656,9 +11719,9 @@ def menu_scan():
 
     opts = {"depth": _SCAN_DEPTH, "max_pages": _SCAN_MAX_PAGES, "timeout": 8.0,
             "target_threads": 3, "lfi_threads": 5, "rate": 5.0,
-            "skip_lfi": False, "verbose": False, "no_verify_ssl": False, "online_cve": False,
+            "skip_lfi": False, "verbose": False, "no_verify_ssl": False, "online_cve": True,
             "lan_mode": False, "discover": (mode != "single"),
-            "mptcp_probe": False}
+            "mptcp_probe": True}
 
     opts["scan_mode"] = _scan_mode
 
@@ -11670,10 +11733,10 @@ def menu_scan():
         opts["host_budget"] = ask_int("เวลารวมสูงสุดต่อโฮสต์ (วินาที) เกินแล้วข้าม", 60, 10, 600)
         opts["skip_lfi"] = ask_yn("Skip LFI scan?", False)
         opts["verbose"] = ask_yn("Verbose?", False)
-        opts["online_cve"] = ask_yn("ค้น CVE ออนไลน์ (CIRCL) ตามเวอร์ชันที่พบ? [ต้องต่อเน็ต]", False)
+        opts["online_cve"] = ask_yn("ค้น CVE ออนไลน์ (CIRCL) ตามเวอร์ชันที่พบ? [ต้องต่อเน็ต]", True)
         opts["mptcp_probe"] = ask_yn(
             "เปิด MPTCP probe (active detection) สำหรับ CVE-2026-98432? "
-            "[ต้อง Linux kernel 5.6+ / Python 3.10+]", False)
+            "[ต้อง Linux kernel 5.6+ / Python 3.10+]", True)
         if mode != "single":
             opts["discover"] = ask_yn("Host discovery ก่อน (เคาะพอร์ตเว็บ ข้ามไอพีตาย — เร็วกว่ามากกับ CIDR)?", True)
 
@@ -12066,9 +12129,9 @@ def menu_pipeline():
 
     opts = {"depth": _SCAN_DEPTH, "max_pages": _SCAN_MAX_PAGES, "timeout": 8.0,
             "target_threads": default_threads, "lfi_threads": 5, "rate": 5.0,
-            "skip_lfi": False, "verbose": False, "no_verify_ssl": False, "online_cve": False,
+            "skip_lfi": False, "verbose": False, "no_verify_ssl": False, "online_cve": True,
             "lan_mode": False, "discover": (mode != "single"),
-            "mptcp_probe": False}
+            "mptcp_probe": True}
 
     opts["scan_mode"] = _scan_mode
 
@@ -12080,10 +12143,10 @@ def menu_pipeline():
         opts["host_budget"] = ask_int("เวลารวมสูงสุดต่อโฮสต์ (วินาที) เกินแล้วข้าม", 60, 10, 600)
         opts["skip_lfi"] = ask_yn("Skip LFI scan?", False)
         opts["verbose"] = ask_yn("Verbose?", False)
-        opts["online_cve"] = ask_yn("ค้น CVE ออนไลน์ (CIRCL) ตามเวอร์ชันที่พบ? [ต้องต่อเน็ต]", False)
+        opts["online_cve"] = ask_yn("ค้น CVE ออนไลน์ (CIRCL) ตามเวอร์ชันที่พบ? [ต้องต่อเน็ต]", True)
         opts["mptcp_probe"] = ask_yn(
             "เปิด MPTCP probe (active detection) สำหรับ CVE-2026-98432? "
-            "[ต้อง Linux kernel 5.6+ / Python 3.10+]", False)
+            "[ต้อง Linux kernel 5.6+ / Python 3.10+]", True)
 
     if not confirm_scan_scope(scope, opts):
         print(c("  ยกเลิก", C.YEL))
@@ -12297,7 +12360,10 @@ Examples:
     ap.add_argument("--timeout", type=float, default=8.0)
     ap.add_argument("--threads", type=int, default=10, help="Target scan threads (concurrency)")
     ap.add_argument("--skip-lfi", action="store_true", help="Skip LFI testing")
-    ap.add_argument("--online-cve", action="store_true", help="Enable CIRCL CVE API online search")
+    ap.add_argument("--online-cve", dest="online_cve", action="store_true", default=True,
+                    help="Enable CIRCL CVE API online search (default: enabled)")
+    ap.add_argument("--no-online-cve", dest="online_cve", action="store_false",
+                    help="Disable CIRCL CVE API online search")
     ap.add_argument("--selected-cves", default="", help="Comma-separated CVE IDs to audit")
     ap.add_argument("--no-verify-ssl", action="store_true")
     ap.add_argument("--lan", action="store_true",
@@ -12306,10 +12372,10 @@ Examples:
     ap.add_argument("--no-discover", action="store_true",
                     help="Disable the fast TCP host-discovery pre-pass for CIDR/multi-host scans "
                          "(by default dead IPs with no open web port are skipped before deep scanning).")
-    ap.add_argument("--mptcp-probe", action="store_true",
-                    help="เปิด MPTCP probe (active detection) สำหรับ CVE-2026-98432 — "
-                         "ตรวจ listener ที่เปิด MPTCP บนพอร์ต 22/80/443/8080/8443/3306/5432 "
-                         "(ต้องใช้ Linux kernel 5.6+ และ Python 3.10+ บนเครื่องสแกน)")
+    ap.add_argument("--mptcp-probe", dest="mptcp_probe", action="store_true", default=True,
+                    help="เปิด MPTCP probe (active detection) สำหรับ CVE-2026-98432 [default: enabled]")
+    ap.add_argument("--no-mptcp-probe", dest="mptcp_probe", action="store_false",
+                    help="ปิดการตรวจ MPTCP probe")
     args = ap.parse_args()
 
     global _OWN_TARGET, _SCAN_DEPTH, _SCAN_MAX_PAGES, _NO_INTERACTIVE
@@ -12331,7 +12397,7 @@ Examples:
             return 0
         opts = {"depth": _SCAN_DEPTH, "max_pages": _SCAN_MAX_PAGES, "timeout": args.timeout,
                 "target_threads": 1, "lfi_threads": 5, "rate": 5.0,
-                "skip_lfi": False, "verbose": False,
+                "skip_lfi": False, "verbose": False, "online_cve": args.online_cve,
                 "no_verify_ssl": args.no_verify_ssl, "lan_mode": args.lan, "discover": not args.no_discover,
                 "mptcp_probe": args.mptcp_probe}
         results = run_scan([(args.target, "single")], opts)
@@ -12353,7 +12419,7 @@ Examples:
             return 0
         opts = {"depth": _SCAN_DEPTH, "max_pages": _SCAN_MAX_PAGES, "timeout": args.timeout,
                 "target_threads": 3, "lfi_threads": 5, "rate": 5.0,
-                "skip_lfi": False, "verbose": False,
+                "skip_lfi": False, "verbose": False, "online_cve": args.online_cve,
                 "no_verify_ssl": args.no_verify_ssl, "lan_mode": args.lan, "discover": not args.no_discover,
                 "mptcp_probe": args.mptcp_probe}
         results = run_scan(targets, opts)
@@ -12375,7 +12441,7 @@ Examples:
             return 0
         opts = {"depth": _SCAN_DEPTH, "max_pages": _SCAN_MAX_PAGES, "timeout": args.timeout,
                 "target_threads": 5, "lfi_threads": 5, "rate": 5.0,
-                "skip_lfi": False, "verbose": False,
+                "skip_lfi": False, "verbose": False, "online_cve": args.online_cve,
                 "no_verify_ssl": args.no_verify_ssl, "lan_mode": args.lan, "discover": not args.no_discover,
                 "mptcp_probe": args.mptcp_probe}
         results = run_scan(targets, opts)
@@ -12403,7 +12469,7 @@ Examples:
             return 0
         opts = {"depth": _SCAN_DEPTH, "max_pages": _SCAN_MAX_PAGES, "timeout": args.timeout,
                 "target_threads": 5, "lfi_threads": 5, "rate": 5.0,
-                "skip_lfi": False, "verbose": False,
+                "skip_lfi": False, "verbose": False, "online_cve": args.online_cve,
                 "no_verify_ssl": args.no_verify_ssl, "lan_mode": args.lan, "discover": not args.no_discover,
                 "mptcp_probe": args.mptcp_probe}
         results = run_scan(targets, opts)
@@ -12426,7 +12492,8 @@ Examples:
         raw_pipeline = args.pipeline.strip()
 
         opts = {"depth": _SCAN_DEPTH, "max_pages": _SCAN_MAX_PAGES, "timeout": args.timeout,
-                "target_threads": max(1, args.threads), "lfi_threads": min(5, max(1, args.threads)), "rate": 5.0,
+                "target_threads": max(1, args.threads), "lfi_threads": min(8, max(1, args.threads)), "rate": 15.0,
+                "crawl_budget": 15,
                 "skip_lfi": args.skip_lfi, "verbose": False,
                 "selected_cves": selected_cve_set, "online_cve": args.online_cve,
                 "no_verify_ssl": args.no_verify_ssl, "lan_mode": args.lan, "discover": not args.no_discover,
