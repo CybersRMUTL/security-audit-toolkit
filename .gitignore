@@ -16,6 +16,8 @@ reports/
 *.pdf
 # ...except the presentation deck, which is meant to be published
 !security_audit_toolkit.pdf
+# ...and the user manual published on the GitHub Pages site
+!docs/Security_Audit_Toolkit_Manual_TH.pdf
 # Report files by name — block even when generated outside reports/
 dashboard_*.html
 report_*.xlsx

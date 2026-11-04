@@ -55,6 +55,10 @@
   .step .n{flex:none;width:38px;height:38px;border-radius:50%;background:var(--blue);color:#fff;font-weight:700;display:flex;align-items:center;justify-content:center}
   .foot{color:var(--muted);font-size:14px;border-top:1px solid var(--border);margin-top:40px;padding-top:20px}
   .tag{color:var(--muted);font-size:14px;font-weight:600;text-transform:uppercase;letter-spacing:.5px}
+  .dl{display:inline-flex;align-items:center;gap:10px;background:var(--blue);color:#fff;font-weight:700;text-decoration:none;padding:14px 22px;border-radius:12px;font-size:17px;margin-top:6px}
+  .dl:hover{filter:brightness(.95)}
+  .dl .ic{font-size:22px}
+  .dl small{display:block;font-weight:500;font-size:13px;opacity:.9}
   @media(max-width:860px){nav.toc{display:none}.grid{grid-template-columns:1fr}.layout{padding:0 14px}}
 </style>
 </head>
@@ -64,6 +68,7 @@
   <div class="brand">Security Audit Toolkit</div>
   <span class="ver">เวอร์ชัน 6.5</span>
   <a href="#overview">ภาพรวม</a>
+  <a href="#manual">📘 คู่มือการใช้งาน (PDF)</a>
   <a href="#download">1 · ดาวน์โหลดจากไหน</a>
   <a href="#install">2 · การติดตั้ง (ละเอียด)</a>
   <a href="#install-mac" class="sub">— macOS</a>
@@ -102,6 +107,16 @@
     <div class="card"><b>เน้นเว็บ &amp; PHP</b><br>PHP, NGINX/Apache, Node.js, CMS, GitLab, อุปกรณ์เครือข่าย ฯลฯ</div>
     <div class="card"><b>รายงานตามมาตรฐาน</b><br>แมปผลเป็น 8 กลุ่ม ThaiCERT/สกมช. พร้อมหลักฐาน (Chain of Custody)</div>
   </div>
+</section>
+
+<section id="manual">
+  <h2>📘 คู่มือการใช้งาน (ไฟล์ PDF)</h2>
+  <p class="lead">ดาวน์โหลดคู่มือการใช้งานฉบับเต็มในรูปแบบไฟล์ PDF เพื่อเปิดอ่านออฟไลน์ สั่งพิมพ์ หรือส่งต่อให้ทีมงาน</p>
+  <a class="dl" href="Security_Audit_Toolkit_Manual_TH.pdf" download>
+    <span class="ic">⬇️</span>
+    <span>ดาวน์โหลดคู่มือการใช้งาน (PDF)<small>Security Audit Toolkit — คู่มือการใช้งาน · ภาษาไทย</small></span>
+  </a>
+  <div class="note">เนื้อหาในหน้านี้และในไฟล์ PDF เป็นชุดเดียวกัน — ใช้หน้าเว็บสำหรับอ่านออนไลน์ หรือดาวน์โหลด PDF ไว้ใช้งานออฟไลน์</div>
 </section>
 
 <section id="download">
