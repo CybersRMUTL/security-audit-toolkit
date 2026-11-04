@@ -148,12 +148,13 @@
     <div class="step"><div class="n">3</div><div><b>ปลดล็อกครั้งแรก</b> — เลือกทำวิธีใดวิธีหนึ่ง (ด้านล่าง)</div></div>
   </div>
   <p><b>วิธีปลดล็อก macOS Gatekeeper</b> (ครั้งแรกครั้งเดียว) เมื่อขึ้นข้อความ <i>"…can't be opened because Apple cannot check it for malicious software"</i>:</p>
+  <div class="note" style="background:#fff4e5;border-color:#f0c48a"><b>⚠️ macOS 15 (Sequoia) ขึ้นไป รวมถึง macOS 26/27:</b> Apple ตัดวิธี "คลิกขวา → Open" ออกแล้ว และไฟล์ <code>.command</code> จะดับเบิลคลิกเปิดไม่ได้ (ถูกบล็อกให้ Move to Trash เพราะไฟล์เองก็ติดธง quarantine) — ให้ใช้ <b>วิธีที่ 1</b> หรือ <b>วิธีที่ 2</b> ด้านล่าง</div>
   <ul>
-    <li><b>วิธีที่ 1 (แนะนำ เร็วสุด):</b> คลิกขวา (หรือกด Control ค้างแล้วคลิก) ที่แอป → เลือก <b>Open</b> → ในกล่องเตือน กด <b>Open</b> อีกครั้ง · ครั้งต่อไปดับเบิลคลิกได้ปกติ</li>
-    <li><b>วิธีที่ 2 (สคริปต์คลิกเดียว):</b> ดับเบิลคลิกไฟล์ <code>Unlock_Security.command</code> ที่แนบมาในโฟลเดอร์</li>
-    <li><b>วิธีที่ 3 (ผ่านการตั้งค่า):</b> เมนู Apple → System Settings → Privacy &amp; Security → เลื่อนลงหัวข้อ Security → กด <b>Open Anyway</b> แล้วใส่รหัสผ่านเครื่อง</li>
-    <li><b>วิธีที่ 4 (ผู้ดูแลระบบ / Terminal):</b> <code>xattr -cr "/Applications/Security Audit Toolkit.app"</code></li>
+    <li><b>วิธีที่ 1 (แนะนำ — ใช้ได้ทุกเวอร์ชัน):</b> ดับเบิลคลิกแอป 1 ครั้ง (จะโดนเตือน) → กด <b>Cancel</b> → เมนู Apple → System Settings → Privacy &amp; Security → เลื่อนลงหัวข้อ Security → กด <b>Open Anyway</b> → ใส่รหัสผ่านเครื่อง</li>
+    <li><b>วิธีที่ 2 (Terminal — เร็วและชัวร์สุด):</b> เปิด Terminal พิมพ์ <code>xattr -cr </code> (เว้นวรรค 1 เคาะ) แล้ว<b>ลากโฟลเดอร์ที่แตก zip มาวาง</b> → กด Enter · ลากทั้งโฟลเดอร์จะปลดล็อกทั้งแอปและไฟล์แนบในครั้งเดียว</li>
+    <li><b>วิธีที่ 3 (เฉพาะ macOS 14 Sonoma หรือเก่ากว่า):</b> คลิกขวา (กด Control ค้างแล้วคลิก) ที่แอป → เลือก <b>Open</b> → กด <b>Open</b> อีกครั้ง <span style="color:var(--crit)">· ใช้ไม่ได้บน macOS 15+</span></li>
   </ul>
+  <p style="color:var(--muted);font-size:14px">หมายเหตุ: ไฟล์ <code>Unlock_Security.command</code> ที่แนบในแพ็กเกจ บน macOS 15+ ต้องรันผ่าน Terminal เท่านั้น (พิมพ์ <code>bash </code> แล้วลากไฟล์มาวาง) — แนะนำใช้วิธีที่ 2 แทน เพราะจบในขั้นตอนเดียว</p>
 
   <h3 id="install-win">🪟 Windows</h3>
   <div class="card">
