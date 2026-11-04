@@ -1,0 +1,438 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Security Audit Toolkit v6.5 — คู่มือฉบับละเอียด</title>
+<style>
+  :root{
+    --navy:#0E1B33; --navy2:#16264a; --blue:#2563EB; --blue-soft:#EAF1FD;
+    --bg:#F6F8FC; --card:#FFFFFF; --border:#E2E8F0; --body:#43506b; --muted:#8CA0C0;
+    --crit:#C0392B; --warn:#B7791F; --safe:#1E8E5A;
+    --font:'Sarabun','IBM Plex Sans Thai','Noto Sans Thai','Leelawadee UI',Tahoma,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--navy);font-family:var(--font);font-size:17px;line-height:1.65}
+  a{color:var(--blue);text-decoration:none}
+  a:hover{text-decoration:underline}
+  code{background:#eef1f6;border:1px solid var(--border);border-radius:6px;padding:2px 7px;font-family:'DejaVu Sans Mono',Consolas,monospace;font-size:0.92em;color:#0E1B33;word-break:break-all}
+  .layout{display:flex;max-width:1180px;margin:0 auto;gap:32px;padding:0 20px}
+  /* Sidebar */
+  nav.toc{position:sticky;top:0;align-self:flex-start;height:100vh;overflow-y:auto;width:262px;flex:none;padding:28px 0 40px}
+  nav.toc .brand{font-weight:700;font-size:20px;color:var(--navy);margin-bottom:4px}
+  nav.toc .ver{display:inline-block;background:var(--blue);color:#fff;font-size:12px;font-weight:600;padding:2px 10px;border-radius:999px;margin-bottom:18px}
+  nav.toc a{display:block;color:var(--body);font-size:15px;padding:7px 12px;border-radius:8px;border-left:3px solid transparent}
+  nav.toc a:hover{background:#fff;text-decoration:none}
+  nav.toc a.sub{padding-left:26px;font-size:14px;color:var(--muted)}
+  main{flex:1;min-width:0;padding:34px 0 120px}
+  /* Hero */
+  .hero{background:var(--navy);color:#fff;border-radius:22px;padding:46px 44px;margin-bottom:40px}
+  .hero .kick{color:#5B9BFF;font-weight:600;letter-spacing:.5px;font-size:15px}
+  .hero h1{margin:8px 0 10px;font-size:40px;line-height:1.15}
+  .hero p{color:#CBD5E1;font-size:19px;margin:0}
+  section{margin-bottom:46px;scroll-margin-top:20px}
+  h2{font-size:30px;margin:0 0 6px;padding-bottom:12px;border-bottom:3px solid var(--blue);display:inline-block}
+  h3{font-size:21px;margin:26px 0 8px;color:var(--navy)}
+  p{margin:10px 0}
+  .lead{font-size:19px;color:var(--navy);font-weight:500}
+  ul,ol{margin:10px 0;padding-left:24px}
+  li{margin:6px 0;color:var(--body)}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:22px 26px;margin:14px 0}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .note{background:var(--blue-soft);border:1px solid #cfe0fb;border-radius:12px;padding:16px 20px;margin:14px 0}
+  .warn-box{background:#FBF3E2;border:1px solid #f0dcb0;border-radius:12px;padding:16px 20px;margin:14px 0}
+  .danger-box{background:#FBE9E7;border:1px solid #f3c6bf;border-radius:12px;padding:16px 20px;margin:14px 0}
+  .ok-box{background:#E7F4EC;border:1px solid #c3e4d1;border-radius:12px;padding:16px 20px;margin:14px 0}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:15.5px;background:#fff;border:1px solid var(--border);border-radius:10px;overflow:hidden}
+  th,td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--border);vertical-align:top}
+  th{background:var(--navy);color:#fff;font-weight:600}
+  tr:last-child td{border-bottom:none}
+  td.c,th.c{text-align:center}
+  .pill{display:inline-block;font-weight:600;font-size:14px;padding:3px 12px;border-radius:999px}
+  .p-crit{background:#FBE9E7;color:var(--crit)} .p-warn{background:#FBF3E2;color:var(--warn)} .p-safe{background:#E7F4EC;color:var(--safe)} .p-blue{background:var(--blue-soft);color:var(--blue)} .p-grey{background:#eef1f5;color:#64748B}
+  .step{display:flex;gap:16px;align-items:flex-start;margin:10px 0}
+  .step .n{flex:none;width:38px;height:38px;border-radius:50%;background:var(--blue);color:#fff;font-weight:700;display:flex;align-items:center;justify-content:center}
+  .foot{color:var(--muted);font-size:14px;border-top:1px solid var(--border);margin-top:40px;padding-top:20px}
+  .tag{color:var(--muted);font-size:14px;font-weight:600;text-transform:uppercase;letter-spacing:.5px}
+  @media(max-width:860px){nav.toc{display:none}.grid{grid-template-columns:1fr}.layout{padding:0 14px}}
+</style>
+</head>
+<body>
+<div class="layout">
+<nav class="toc">
+  <div class="brand">Security Audit Toolkit</div>
+  <span class="ver">เวอร์ชัน 6.5</span>
+  <a href="#overview">ภาพรวม</a>
+  <a href="#download">1 · ดาวน์โหลดจากไหน</a>
+  <a href="#install">2 · การติดตั้ง (ละเอียด)</a>
+  <a href="#install-mac" class="sub">— macOS</a>
+  <a href="#install-win" class="sub">— Windows</a>
+  <a href="#install-src" class="sub">— จากซอร์สโค้ด</a>
+  <a href="#usage">3 · การใช้งาน</a>
+  <a href="#settings">4 · การตั้งค่า</a>
+  <a href="#techniques">5 · เทคนิคการตรวจ</a>
+  <a href="#cves" class="sub">— ช่องโหว่ที่ตรวจ + ผลกระทบ</a>
+  <a href="#confirm">6 · การยืนยันผล</a>
+  <a href="#rce" class="sub">— RCE Verify ปลอดภัยไหม</a>
+  <a href="#scope">7 · ขอบเขต 8 กลุ่ม</a>
+  <a href="#report">8 · อ่านรายงาน + ที่เก็บผล</a>
+  <a href="#apps">9 · การประยุกต์ใช้</a>
+  <a href="#impact">10 · ผลกระทบ</a>
+  <a href="#faq">11 · คำถามที่พบบ่อย</a>
+  <a href="#faq-rapid7" class="sub">— เทียบ Rapid7</a>
+  <a href="#faq-online" class="sub">— online CVE / โดนแบน</a>
+  <a href="#faq-dup" class="sub">— ข้อมูลซ้ำซ้อน</a>
+  <a href="#bestpractice">12 · แนวปฏิบัติที่ดี</a>
+</nav>
+
+<main>
+<div class="hero">
+  <div class="kick">ความร่วมมือ สกมช. (NCSA) × RMUT CERT</div>
+  <h1>Security Audit Toolkit — คู่มือฉบับละเอียด</h1>
+  <p>เครื่องมือตรวจหา · ยืนยัน · ออกรายงานช่องโหว่ สำหรับทีม CERT · เวอร์ชัน 6.5</p>
+</div>
+
+<section id="overview">
+  <h2>ภาพรวม</h2>
+  <p class="lead">เครื่องมือ "ไฟล์เดียว" ที่ตรวจหาช่องโหว่เว็บและโครงสร้างพื้นฐานจากภายนอก แล้วออกรายงานภาษาไทยให้ทีม CERT</p>
+  <div class="grid">
+    <div class="card"><b>ติดตั้งง่าย</b><br>แอปเดสก์ท็อป/ไฟล์เดียว ไม่ต้องลง Python มีทั้ง macOS และ Windows</div>
+    <div class="card"><b>ตรวจจากภายนอก</b><br>สแกนแบบ remote ไม่ต้องล็อกอินเข้าเครื่องเป้าหมาย (unauthenticated)</div>
+    <div class="card"><b>เน้นเว็บ &amp; PHP</b><br>PHP, NGINX/Apache, Node.js, CMS, GitLab, อุปกรณ์เครือข่าย ฯลฯ</div>
+    <div class="card"><b>รายงานตามมาตรฐาน</b><br>แมปผลเป็น 8 กลุ่ม ThaiCERT/สกมช. พร้อมหลักฐาน (Chain of Custody)</div>
+  </div>
+</section>
+
+<section id="download">
+  <h2>1 · ดาวน์โหลดจากไหน</h2>
+  <p>ดาวน์โหลดเวอร์ชันพร้อมใช้ (ไม่ต้องติดตั้ง Python) ได้จากหน้า <b>GitHub Releases</b> ของโปรเจกต์:</p>
+  <div class="note">
+    <b>หน้าดาวน์โหลด (Release v6.5.0):</b><br>
+    <a href="https://github.com/CybersRMUTL/security-audit-toolkit/releases/tag/v6.5.0">https://github.com/CybersRMUTL/security-audit-toolkit/releases/tag/v6.5.0</a>
+  </div>
+  <table>
+    <tr><th>ระบบปฏิบัติการ</th><th>ไฟล์ที่ต้องโหลด</th><th>ภายใน</th></tr>
+    <tr><td><b>macOS</b> (Apple Silicon)</td><td><code>SecurityAuditToolkit-v6.5.0-macOS.zip</code></td><td>แอป .app + คู่มือ + สคริปต์ปลดล็อก</td></tr>
+    <tr><td><b>Windows</b> (64-bit)</td><td><code>SecurityAuditToolkit-v6.5.0-Windows.zip</code></td><td>ไฟล์ .exe + คู่มือ + สคริปต์ปลดล็อก</td></tr>
+  </table>
+  <p>ซอร์สโค้ด (สำหรับรันเอง/พัฒนา) อยู่ที่ repository เดียวกัน:
+  <a href="https://github.com/CybersRMUTL/security-audit-toolkit">github.com/CybersRMUTL/security-audit-toolkit</a></p>
+  <div class="note">หน้า Release อาจแสดงหัวข้อ "Assets" — ให้กดไฟล์ <code>.zip</code> ตามระบบของคุณ</div>
+</section>
+
+<section id="install">
+  <h2>2 · การติดตั้ง (ละเอียด)</h2>
+  <p>เมื่อเปิดครั้งแรก ระบบปฏิบัติการจะเตือนความปลอดภัย เพราะแอปแจกภายในหน่วยงาน ไม่ได้ผ่าน App Store / Microsoft Store — <b>เป็นเรื่องปกติ ปลดล็อกครั้งเดียวจบ</b></p>
+
+  <h3 id="install-mac">🍎 macOS</h3>
+  <div class="card">
+    <p><b>เครื่องที่รองรับ:</b> Mac ชิป <b>Apple Silicon (M1/M2/M3/M4)</b> เท่านั้น · macOS 11 (Big Sur) ขึ้นไป · <span style="color:var(--crit)">ไม่รองรับ Mac ชิป Intel</span></p>
+    <div class="step"><div class="n">1</div><div>ดับเบิลคลิกไฟล์ <code>.zip</code> เพื่อแตกไฟล์</div></div>
+    <div class="step"><div class="n">2</div><div>ลาก <b>"Security Audit Toolkit.app"</b> ไปไว้ในโฟลเดอร์ <b>Applications</b> (วางบน Desktop ก่อนก็ได้)</div></div>
+    <div class="step"><div class="n">3</div><div><b>ปลดล็อกครั้งแรก</b> — เลือกทำวิธีใดวิธีหนึ่ง (ด้านล่าง)</div></div>
+  </div>
+  <p><b>วิธีปลดล็อก macOS Gatekeeper</b> (ครั้งแรกครั้งเดียว) เมื่อขึ้นข้อความ <i>"…can't be opened because Apple cannot check it for malicious software"</i>:</p>
+  <ul>
+    <li><b>วิธีที่ 1 (แนะนำ เร็วสุด):</b> คลิกขวา (หรือกด Control ค้างแล้วคลิก) ที่แอป → เลือก <b>Open</b> → ในกล่องเตือน กด <b>Open</b> อีกครั้ง · ครั้งต่อไปดับเบิลคลิกได้ปกติ</li>
+    <li><b>วิธีที่ 2 (สคริปต์คลิกเดียว):</b> ดับเบิลคลิกไฟล์ <code>Unlock_Security.command</code> ที่แนบมาในโฟลเดอร์</li>
+    <li><b>วิธีที่ 3 (ผ่านการตั้งค่า):</b> เมนู Apple → System Settings → Privacy &amp; Security → เลื่อนลงหัวข้อ Security → กด <b>Open Anyway</b> แล้วใส่รหัสผ่านเครื่อง</li>
+    <li><b>วิธีที่ 4 (ผู้ดูแลระบบ / Terminal):</b> <code>xattr -cr "/Applications/Security Audit Toolkit.app"</code></li>
+  </ul>
+
+  <h3 id="install-win">🪟 Windows</h3>
+  <div class="card">
+    <p><b>เครื่องที่รองรับ:</b> Windows 10 / 11 (64-bit) หรือ Windows Server 2016/2019/2022 · ไม่ต้องติดตั้ง Python</p>
+    <div class="step"><div class="n">1</div><div>คลิกขวาที่ไฟล์ <code>.zip</code> → <b>Extract All…</b> เพื่อแตกไฟล์ <span style="color:var(--crit)">(สำคัญ: ต้องแตกออกก่อน อย่าเปิด .exe จากข้างใน .zip โดยตรง)</span></div></div>
+    <div class="step"><div class="n">2</div><div>เปิดโฟลเดอร์ที่แตกไว้ แล้วดับเบิลคลิก <b>"Security Audit Toolkit.exe"</b></div></div>
+    <div class="step"><div class="n">3</div><div>ถ้ามีจอฟ้าเตือน ให้ปลดล็อก (ด้านล่าง)</div></div>
+  </div>
+  <p><b>วิธีปลดล็อก Windows SmartScreen</b> เมื่อขึ้นจอฟ้า <i>"Windows protected your PC"</i>:</p>
+  <ul>
+    <li><b>วิธีที่ 1 (แนะนำ):</b> คลิก <b>More info</b> → กดปุ่ม <b>Run anyway</b> · ครั้งต่อไปจะไม่เตือนอีก</li>
+    <li><b>วิธีที่ 2 (สคริปต์คลิกเดียว):</b> ดับเบิลคลิกไฟล์ <code>Unlock_Security.bat</code> ในโฟลเดอร์</li>
+    <li><b>วิธีที่ 3 (ปลดบล็อกที่ไฟล์):</b> คลิกขวา <code>Security Audit Toolkit.exe</code> → Properties → แท็บ General ด้านล่าง ติ๊ก <b>Unblock</b> → Apply → OK</li>
+  </ul>
+
+  <h3 id="install-src">🐍 ติดตั้งจากซอร์สโค้ด (Python)</h3>
+  <p>สำหรับผู้ที่ต้องการรัน/พัฒนาเอง — ต้องมี Python 3.10 ขึ้นไป</p>
+  <div class="card">
+    <p style="margin:0 0 6px"><code>git clone https://github.com/CybersRMUTL/security-audit-toolkit.git</code></p>
+    <p style="margin:0 0 6px"><code>cd security-audit-toolkit</code></p>
+    <p style="margin:0 0 6px"><code>pip install -r requirements.txt</code></p>
+    <p style="margin:0"><code>python security_audit_toolkit.py --help</code></p>
+  </div>
+  <div class="note">dependencies หลัก: requests, dnspython, reportlab, openpyxl (และ customtkinter สำหรับ GUI) — เครื่องมือ "degrade gracefully" คือถ้าขาดตัวเสริมบางตัว จะปิดเฉพาะฟีเจอร์นั้น ไม่ล่มทั้งโปรแกรม</div>
+</section>
+
+<section id="usage">
+  <h2>3 · การใช้งาน</h2>
+  <p>ใช้งานได้ 2 โหมด — GUI (หน้าจอ) และ CLI (บรรทัดคำสั่ง) โดยทั้งคู่ใช้เอนจินตรวจตัวเดียวกัน</p>
+
+  <h3>โหมด GUI — 5 ขั้นตอน</h3>
+  <div class="card">
+    <div class="step"><div class="n">1</div><div><b>เป้าหมาย &amp; โหมด</b> — ใส่เป้าหมาย (โฮสต์/IP/ไฟล์รายชื่อ) และเลือกโหมดสแกน</div></div>
+    <div class="step"><div class="n">2</div><div><b>เลือกรายการ CVE</b> — เลือกชุด CVE ที่ตรวจ หรือใช้ทั้งหมด</div></div>
+    <div class="step"><div class="n">3</div><div><b>8 กลุ่ม ThaiCERT</b> — ดูว่าการสแกนครอบคลุมกลุ่มใดบ้าง</div></div>
+    <div class="step"><div class="n">4</div><div><b>การสแกนสด (Live)</b> — กด "เริ่มการสแกน" ดู log และแถบคืบหน้าแบบเรียลไทม์</div></div>
+    <div class="step"><div class="n">5</div><div><b>แฟ้มรายงาน &amp; ผลลัพธ์</b> — เปิดรายงานที่สร้างให้อัตโนมัติ</div></div>
+  </div>
+
+  <h3>โหมด CLI — เลือกโหมดเป้าหมาย</h3>
+  <table>
+    <tr><th>ธงคำสั่ง</th><th>ใช้เมื่อ</th><th>ตัวอย่าง</th></tr>
+    <tr><td><code>--target</code></td><td>เป้าหมายเดี่ยว</td><td><code>--target host.example.com</code></td></tr>
+    <tr><td><code>--cidr</code></td><td>ช่วง IP ทั้งวง</td><td><code>--cidr 192.168.1.0/24</code></td></tr>
+    <tr><td><code>--wildcard</code></td><td>ค้นซับโดเมนทั้งโดเมน</td><td><code>--wildcard *.example.com</code></td></tr>
+    <tr><td><code>--list</code></td><td>ตรวจจากไฟล์รายชื่อ</td><td><code>--list hosts.txt</code></td></tr>
+    <tr><td><code>--pipeline</code></td><td>ตรวจเจาะ + ยืนยันช่องโหว่</td><td><code>--pipeline host --i-own-this-target</code></td></tr>
+  </table>
+  <div class="danger-box">โหมด <b>--pipeline</b> (ทดสอบเชิงรุก/ยืนยัน RCE) <b>บังคับ</b>ต้องใส่ <code>--i-own-this-target</code> เพื่อยืนยันว่าเป็นเจ้าของ/ได้รับอนุญาต</div>
+</section>
+
+<section id="settings">
+  <h2>4 · การตั้งค่าโปรแกรม</h2>
+  <table>
+    <tr><th>การตั้งค่า</th><th class="c">ค่าเริ่มต้น</th><th>ความหมาย</th></tr>
+    <tr><td><code>timeout</code></td><td class="c">8 วิ</td><td>เวลารอสูงสุดต่อคำขอ</td></tr>
+    <tr><td><code>threads</code></td><td class="c">10</td><td>จำนวนงานขนาน (เร็วขึ้นแต่โหลดสูงขึ้น)</td></tr>
+    <tr><td><code>depth</code></td><td class="c">2</td><td>ความลึกในการไล่สำรวจเว็บ (crawl)</td></tr>
+    <tr><td><code>max-pages</code></td><td class="c">50</td><td>จำนวนหน้าสูงสุดที่สำรวจต่อเป้าหมาย</td></tr>
+    <tr><td><code>online-cve</code></td><td class="c">เปิด</td><td>ค้น CVE สดจาก CIRCL ตามเวอร์ชัน</td></tr>
+    <tr><td><code>mptcp-probe</code></td><td class="c">เปิด</td><td>ตรวจ MPTCP เพื่อประเมินช่องโหว่เคอร์เนล</td></tr>
+    <tr><td><code>lan mode</code></td><td class="c">อัตโนมัติ</td><td>โหมดในวง LAN (เปิดตรวจ MAC/OUI)</td></tr>
+    <tr><td><code>output-dir</code></td><td class="c">Documents</td><td>โฟลเดอร์เก็บรายงาน</td></tr>
+    <tr><td><code>เลือก CVE / skip-lfi</code></td><td class="c">—</td><td>เลือกชุด CVE ที่ตรวจ / ข้ามการทดสอบ LFI</td></tr>
+  </table>
+</section>
+
+<section id="techniques">
+  <h2>5 · เทคนิคในการตรวจสอบ</h2>
+  <div class="grid">
+    <div class="card"><b>Fingerprint</b><br>อ่าน header / banner / HTML เพื่อระบุเทคโนโลยีและเวอร์ชัน</div>
+    <div class="card"><b>จับคู่ CVE</b><br>เทียบเวอร์ชันกับคลัง CVE ในตัว + ชุด CVE อดีต (historical)</div>
+    <div class="card"><b>Online CVE (CIRCL)</b><br>ค้น CVE สดตามเวอร์ชันที่พบ (เปิด/ปิดได้ · มีแคช)</div>
+    <div class="card"><b>ค้นซับโดเมน</b><br>รวบรวมจากหลายแหล่ง (crt.sh, OTX ฯลฯ) เพื่อขยายพื้นผิว</div>
+    <div class="card"><b>พอร์ต + OS/MPTCP</b><br>สแกนพอร์ตที่เปิด และตรวจสัญญาณ OS/เคอร์เนล Linux</div>
+    <div class="card"><b>TLS &amp; MAC/OUI</b><br>ตรวจค่า TLS และผู้ผลิตอุปกรณ์จาก MAC (เฉพาะในวง LAN)</div>
+  </div>
+</section>
+
+<section id="cves">
+  <h2>ช่องโหว่ที่ตรวจ — ผลกระทบถ้าถูกแฮก</h2>
+  <p class="lead">เครื่องมือตรวจ CVE หลัก 14 รายการ ใน 5 กลุ่มเทคโนโลยี — ด้านล่างอธิบายว่า "ถ้าแฮกเกอร์ใช้ช่องโหว่แต่ละตัว ระบบจะเป็นอย่างไร" แบบเข้าใจง่าย</p>
+
+  <h3>เข้าใจระดับความรุนแรงก่อน</h3>
+  <p><span class="pill p-crit">Critical</span> ร้ายแรงสุด — มักถึงขั้น "ยึดเครื่อง/รันโค้ดได้" ต้องแก้ทันที &nbsp; <span class="pill p-warn">High</span> ร้ายแรง — ควรแก้เร็ว &nbsp; <span class="pill p-grey">Medium</span> ปานกลาง — ควรวางแผนแก้</p>
+  <div class="note"><b>คำที่เจอบ่อย — RCE (Remote Code Execution):</b> แฮกเกอร์สั่งรันคำสั่งของตัวเองบนเซิร์ฟเวอร์จากระยะไกล = เท่ากับ "ยึดเครื่อง" เป็นผลกระทบที่อันตรายที่สุด</div>
+
+  <h3>🐘 PHP (3 รายการ)</h3>
+  <table>
+    <tr><th style="width:34%">ช่องโหว่</th><th class="c" style="width:14%">ความรุนแรง</th><th>ถ้าแฮกเกอร์ใช้ช่องนี้ ระบบจะเป็นยังไง</th></tr>
+    <tr><td><code>CVE-2026-109618</code><br>PHP Use-After-Free (OOM)</td><td class="c"><span class="pill p-crit">Critical</span></td><td>PHP เผลอใช้หน่วยความจำที่คืนไปแล้วซ้ำ → แฮกเกอร์เขียนทับจน <b>รันโค้ดบนเซิร์ฟเวอร์ได้ (RCE)</b> = ยึดเว็บทั้งเครื่อง<br><span style="color:var(--muted)">เปรียบเทียบ: ห้องที่เช็คเอาท์แล้วแต่กุญแจเก่ายังเปิดได้ คนร้ายแอบเข้าไปใช้</span></td></tr>
+    <tr><td><code>CVE-2026-109619</code><br>PHP Use-After-Free (global state)</td><td class="c"><span class="pill p-crit">Critical</span></td><td>คล้ายข้างบน (UAF อีกจุด) → <b>รันโค้ด/ยึดเครื่อง</b> หรือทำเว็บล่ม</td></tr>
+    <tr><td><code>CVE-2026-115560</code><br>Session Upload Progress Injection</td><td class="c"><span class="pill p-warn">Medium-High</span></td><td>อาศัยกลไกอัปโหลดของ PHP ฝังโค้ดลงไฟล์ session แล้ว (ถ้ามีช่อง LFI) สั่งรัน → <b>RCE</b> — <b>นี่คือช่องที่ฟีเจอร์ RCE Verify ของเราใช้พิสูจน์</b><br><span style="color:var(--muted)">เปรียบเทียบ: แอบสอดจดหมายไว้ในตู้รับของ แล้วหลอกให้พนักงานหยิบไปอ่าน</span></td></tr>
+  </table>
+
+  <h3>🌐 NGINX / เว็บเซิร์ฟเวอร์ (5 รายการ)</h3>
+  <table>
+    <tr><th style="width:34%">ช่องโหว่</th><th class="c" style="width:14%">ความรุนแรง</th><th>ถ้าแฮกเกอร์ใช้ช่องนี้ ระบบจะเป็นยังไง</th></tr>
+    <tr><td><code>CVE-2026-15176</code><br>Heap Buffer Overflow (alias+rewrite)</td><td class="c"><span class="pill p-crit">Critical</span></td><td>ส่งคำขอพิเศษให้ NGINX เขียนข้อมูล <b>ล้นที่เก็บ</b> → เว็บ <b>ล่ม</b> หรือถูก <b>ยึด (RCE)</b><br><span style="color:var(--muted)">เปรียบเทียบ: เทน้ำใส่แก้วจนล้นไปท่วมของข้างๆ จนระบบรวน</span></td></tr>
+    <tr><td><code>CVE-2026-93479</code><br>Heap Buffer Overflow (map+regex)</td><td class="c"><span class="pill p-crit">Critical</span></td><td>บัฟเฟอร์ล้นอีกรูปแบบ → <b>เว็บล่ม / ถูกยึด</b> เช่นกัน</td></tr>
+    <tr><td><code>CVE-2026-97205</code><br>Use-After-Free (AIO+SSI)</td><td class="c"><span class="pill p-crit">Critical</span></td><td>ใช้หน่วยความจำที่คืนแล้วซ้ำในตัว NGINX → <b>crash หรือ RCE</b></td></tr>
+    <tr><td><code>CVE-2026-95101</code><br>Request Body Injection (HTTP/3)</td><td class="c"><span class="pill p-grey">Medium</span></td><td>แทรกข้อมูลในคำขอ HTTP/3 → อาจ <b>ลักลอบส่งคำขอปลอม/ข้ามการตรวจ</b> (เช่นหลบ WAF)</td></tr>
+    <tr><td><code>CVE-2026-97629</code><br>Session Forgery (TLS tickets)</td><td class="c"><span class="pill p-grey">Medium</span></td><td>ปลอม session จาก TLS ticket → อาจ <b>สวมรอยผู้ใช้คนอื่น</b><br><span style="color:var(--muted)">เปรียบเทียบ: ปลอมตั๋วเข้างานที่ยังใช้ซ้ำได้</span></td></tr>
+  </table>
+
+  <h3>🟢 Node.js (4 รายการ)</h3>
+  <table>
+    <tr><th style="width:34%">ช่องโหว่</th><th class="c" style="width:14%">ความรุนแรง</th><th>ถ้าแฮกเกอร์ใช้ช่องนี้ ระบบจะเป็นยังไง</th></tr>
+    <tr><td><code>CVE-2026-111497</code><br>Brotli Out-of-bounds Write (RCE)</td><td class="c"><span class="pill p-crit">Critical</span></td><td>ส่งข้อมูลบีบอัด Brotli ที่ปั้นมา ทำให้เขียนหน่วยความจำนอกขอบเขต → <b>RCE / ยึดเครื่อง</b></td></tr>
+    <tr><td><code>CVE-2026-105483</code><br>TLS Cert Validation (Unicode IP)</td><td class="c"><span class="pill p-warn">High</span></td><td>ข้ามการตรวจใบรับรอง TLS → <b>ดักกลางทาง (Man-in-the-Middle)</b> แอบอ่าน/แก้ข้อมูลที่ควรเข้ารหัส<br><span style="color:var(--muted)">เปรียบเทียบ: ปลอมบัตรประชาชนแล้วแอปหลงเชื่อ เลยคุยความลับกับคนผิด</span></td></tr>
+    <tr><td><code>CVE-2026-106069</code><br>TLS Endpoint Identity Bypass</td><td class="c"><span class="pill p-warn">High</span></td><td>ข้ามการยืนยันตัวตนปลายทาง TLS → <b>MITM</b> เช่นกัน ข้อมูลที่ส่งอาจถูกดัก</td></tr>
+    <tr><td><code>CVE-2026-105482</code><br>DNS NUL Domain Bypass</td><td class="c"><span class="pill p-warn">High</span></td><td>หลอกการตรวจชื่อโดเมนด้วยอักขระพิเศษ → อาจพาแอป <b>ไปต่อเซิร์ฟเวอร์ของแฮกเกอร์</b> (SSRF/เปลี่ยนทาง)</td></tr>
+  </table>
+
+  <h3>🦊 GitLab (1 รายการ)</h3>
+  <table>
+    <tr><th style="width:34%">ช่องโหว่</th><th class="c" style="width:14%">ความรุนแรง</th><th>ถ้าแฮกเกอร์ใช้ช่องนี้ ระบบจะเป็นยังไง</th></tr>
+    <tr><td><code>CVE-2026-110264</code><br>GitLab</td><td class="c"><span class="pill p-warn">High</span></td><td>ช่องโหว่ในตัว GitLab → อาจ <b>เข้าถึงซอร์สโค้ด/ความลับใน repo</b> หรือข้อมูลโปรเจกต์โดยไม่ได้รับอนุญาต<br><span style="color:var(--muted)">กระทบหนักเพราะซอร์สโค้ดมักมีรหัส/คีย์ของระบบอื่นอยู่ด้วย</span></td></tr>
+  </table>
+
+  <h3>🧩 OS / Kernel (1 รายการ)</h3>
+  <table>
+    <tr><th style="width:34%">ช่องโหว่</th><th class="c" style="width:14%">ความรุนแรง</th><th>ถ้าแฮกเกอร์ใช้ช่องนี้ ระบบจะเป็นยังไง</th></tr>
+    <tr><td><code>CVE-2026-98432</code><br>Linux Kernel TCP Use-After-Free</td><td class="c"><span class="pill p-crit">Critical</span></td><td>ส่ง packet พิเศษไปพอร์ตที่เปิด → เกิด UAF ที่ <b>แกนกลาง (kernel) ของระบบ</b> → อาจ <b>ยกระดับเป็น root หรือทำเครื่องล่ม</b><br><span style="color:var(--muted)">กระทบหนักสุดเพราะถ้าโดนที่เคอร์เนล = คุมได้ทั้งเครื่อง ไม่ใช่แค่เว็บ</span></td></tr>
+  </table>
+
+  <div class="warn-box"><b>สรุปภาพรวม:</b> ช่องโหว่ระดับ <b>Critical</b> (PHP/NGINX UAF+overflow, Node Brotli, Linux kernel) ส่วนใหญ่นำไปสู่ <b>RCE = ยึดเครื่อง</b> จึงต้องแก้ก่อน · ระดับ <b>High</b> (Node TLS/DNS, GitLab) มักเป็น <b>ดักข้อมูล/เข้าถึงข้อมูลโดยไม่ได้รับอนุญาต</b> · ระดับ <b>Medium</b> (NGINX HTTP/3, TLS ticket) มักเป็น <b>หลบการตรวจ/สวมรอย</b></div>
+  <div class="note">หมายเหตุ: เครื่องมือ "ตรวจจากภายนอก" บอกได้ว่า <b>เวอร์ชันเข้าข่ายช่องโหว่หรือไม่</b> — การยืนยันว่าถูกโจมตีได้จริงและระดับผลกระทบจริง ควรดูสถานะ (ดูหัวข้อ "การยืนยันผล") และตรวจซ้ำบนเครื่อง</div>
+</section>
+
+<section id="confirm">
+  <h2>6 · การยืนยันผล (Confirm)</h2>
+  <p>แต่ละช่องโหว่ถูกจัดระดับความมั่นใจเป็น "สถานะ" ไม่ใช่แค่พบ/ไม่พบ</p>
+  <table>
+    <tr><th>สถานะ</th><th>ความหมาย</th></tr>
+    <tr><td><span class="pill p-crit">vulnerable</span></td><td>ยืนยันแล้วว่ามีช่องโหว่จริง (เช่น ทดสอบ RCE ผ่าน)</td></tr>
+    <tr><td><span class="pill p-warn">vulnerable-version</span></td><td>เวอร์ชันอยู่ในช่วงกระทบ แต่ยังไม่ได้ยืนยันเชิงรุก</td></tr>
+    <tr><td><span class="pill p-warn">likely / unpatched</span></td><td>มีสัญญาณบ่งชี้ ควรตรวจสอบและอัปเดต</td></tr>
+    <tr><td><span class="pill p-safe">patched / n/a</span></td><td>แก้แล้ว หรือไม่เกี่ยวข้องกับระบบนี้</td></tr>
+    <tr><td><span class="pill p-grey">unknown</span></td><td>ตรวจจากภายนอกไม่ได้ → ต้องยืนยันบนเครื่อง</td></tr>
+  </table>
+  <div class="note">โหมด <b>--pipeline</b> จะทดสอบยืนยัน RCE จริง (ต้อง <code>--i-own-this-target</code>) และเก็บ <b>หลักฐาน Chain of Custody</b> ไว้ในไฟล์ JSON</div>
+</section>
+
+<section id="rce">
+  <h2>RCE Verify ทำงานยังไง · ปลอดภัยไหม?</h2>
+  <p class="lead">RCE Verify คือการ "พิสูจน์ว่าช่องโหว่มีอยู่จริง" โดยเก็บหลักฐาน — ไม่ใช่การเจาะเพื่อยึดเครื่องหรือทำลายระบบ</p>
+
+  <h3>หลักการแบบเข้าใจง่าย</h3>
+  <p>แทนที่จะ "เดา" จากเลขเวอร์ชันเฉย ๆ เครื่องมือจะลองสั่งให้เซิร์ฟเวอร์ <b>ตอบข้อมูลระบบกลับมา</b> ผ่านช่องโหว่ PHP Session Upload + LFI (CVE-2026-115560) — เปรียบเหมือน "เคาะประตูแล้วขอให้บอกชื่อ" เพื่อพิสูจน์ว่าประตูเปิดได้จริง</p>
+  <div class="card">
+    <div class="step"><div class="n">1</div><div><b>ฝากโค้ดเล็ก ๆ</b> ไว้ในไฟล์ session ของ PHP (ผ่านการอัปโหลด — เนื้อไฟล์เป็นข้อความ benign)</div></div>
+    <div class="step"><div class="n">2</div><div><b>เรียกไฟล์นั้นผ่านช่องโหว่ LFI</b> ให้โค้ดทำงาน</div></div>
+    <div class="step"><div class="n">3</div><div><b>ถ้าเห็น "รหัสลับ" (marker) ตอบกลับมา</b> = ยืนยันว่าช่องโหว่มีจริง 100%</div></div>
+    <div class="step"><div class="n">4</div><div><b>(สำรอง)</b> ถ้ารันโค้ดไม่ได้ จะลองอัปไฟล์ marker แล้วอ่านกลับ → พิสูจน์แค่ว่า "เขียน+อ่านไฟล์ได้"</div></div>
+  </div>
+  <div class="note">คำสั่งที่รันบนเป้าหมายมีแค่ <code>id</code> (ดูว่าเป็นผู้ใช้อะไร) และ <code>php_uname()</code> (ดูข้อมูลระบบ) — <b>อ่านอย่างเดียว ไม่แก้ ไม่ลบ ไม่เพิ่มอะไร</b></div>
+
+  <h3>ส่งผลกับเป้าหมายยังไง</h3>
+  <div class="grid">
+    <div class="card" style="border-color:#c3e4d1"><b style="color:var(--safe)">ไม่ทำลายข้อมูล</b><br>ไม่ลบ/ไม่แก้ไฟล์ ไม่ฝัง backdoor ไม่ยกระดับสิทธิ์ ไม่ลงโปรแกรมใด ๆ</div>
+    <div class="card" style="border-color:#c3e4d1"><b style="color:var(--safe)">โหลดเบา</b><br>ยิง HTTP แค่ไม่กี่ request ต่อเป้าหมาย</div>
+    <div class="card" style="border-color:#f0dcb0"><b style="color:var(--warn)">ทิ้งร่องรอยเล็กน้อย</b><br>เขียนไฟล์ session ชั่วคราวเล็ก ๆ บนเครื่อง — เครื่องมือไม่ลบให้ อาศัย PHP เคลียร์เอง</div>
+    <div class="card" style="border-color:#f0dcb0"><b style="color:var(--warn)">เห็นใน log</b><br>log เซิร์ฟเวอร์จะมี marker <code>RMUTCERT_*</code> และ User-Agent "authorized testing only" (ตั้งใจให้ตรวจย้อนได้)</div>
+  </div>
+
+  <h3>ด่านความปลอดภัยที่มีอยู่แล้ว</h3>
+  <ul>
+    <li><b>จำกัด Private IP</b> — ถ้าเป้าหมายไม่ใช่ IP ภายใน จะถูกปฏิเสธ เว้นแต่ใส่ <code>--i-own-this-target</code> (แล้วเตือนว่าเป็น public)</li>
+    <li><b>ถาม YES ก่อนรัน</b> (โหมด interactive) — ต้องพิมพ์ <code>YES</code> ยืนยันเอง</li>
+    <li><b>เก็บหลักฐาน Chain-of-Custody</b> — transcript + SHA-256, metadata, summary, rce_proof บันทึกชื่อผู้ทดสอบ (operator)</li>
+  </ul>
+
+  <h3>แล้วต้องกังวลไหม?</h3>
+  <div class="ok-box"><b>ปลอดภัยในแง่ "ไม่ทำระบบพัง / ข้อมูลไม่หาย"</b> — คำสั่งเป็น read-only, เนื้อไฟล์ benign, มีด่านกัน และเก็บหลักฐานครบ</div>
+  <div class="warn-box"><b>แต่ต้องเข้าใจ:</b> มัน "รันโค้ดจริง" บนเป้าหมายที่มีช่องโหว่ และทิ้งร่องรอย → <b>ใช้เฉพาะระบบที่ได้รับอนุญาต</b> · ระวังบน production (อาจไป trigger WAF/IDS หรือทำ log รก) · โหมด GUI/pipeline จะ<b>ข้ามคำถาม YES</b> เหลือแค่ด่าน private-IP + <code>--i-own-this-target</code> จึงต้องมั่นใจเป้าหมายก่อนสั่ง</div>
+  <div class="note"><b>สรุป:</b> ไม่ต้องกังวลเรื่องทำระบบเสียหาย แต่เพราะมันรันโค้ดจริงและทิ้งร่องรอย จึงไม่ควรยิงมั่ว — ยิงเฉพาะเป้าหมายที่ได้รับอนุญาต และควรแจ้ง/นัดหมายทีมดูแลระบบก่อน โดยเฉพาะระบบที่ให้บริการจริง</div>
+</section>
+
+<section id="scope">
+  <h2>7 · ขอบเขต: 8 กลุ่ม ThaiCERT</h2>
+  <p>ตัวเลข % คือ <b>เพดานการมองเห็นจากภายนอกแบบไม่ล็อกอิน</b> (remote unauthenticated) ของกลุ่มนั้น — <b>ไม่ใช่ความแม่นรายกรณี</b></p>
+  <table>
+    <tr><th class="c">กลุ่ม</th><th>ประเภทระบบ</th><th class="c">เพดาน</th><th>ทำไมได้เท่านี้</th></tr>
+    <tr><td class="c"><b>1</b></td><td>เว็บไซต์ &amp; ระบบภายใน (CMS)</td><td class="c"><b>88%</b></td><td>CMS โชว์ตัวเองง่าย (meta generator, /wp-content/, readme, ปลั๊กอิน) → ได้ทั้งชนิด+เวอร์ชัน</td></tr>
+    <tr><td class="c"><b>2</b></td><td>หลังบ้านแอป &amp; API (Framework)</td><td class="c"><b>60%</b></td><td>เฟรมเวิร์กซ่อนตัวเก่ง ไม่ค่อยโชว์เวอร์ชัน จับได้เมื่อมี debug เปิดทิ้ง</td></tr>
+    <tr><td class="c"><b>3</b></td><td>Hosting Control Panel</td><td class="c"><b>75%</b></td><td>มีพอร์ต/หน้าล็อกอินเฉพาะตัว + มักโชว์เวอร์ชัน</td></tr>
+    <tr><td class="c"><b>4</b></td><td>อุปกรณ์ (NAS/กล้อง/Network)</td><td class="c"><b>65%</b></td><td>คลังสัญญาณกว้าง + MAC/OUI (เฉพาะ LAN) แต่ firmware ส่วนใหญ่ปิด ไม่โชว์เวอร์ชัน</td></tr>
+    <tr><td class="c"><b>5</b></td><td>Container &amp; Docker</td><td class="c"><b>45%</b></td><td>อยู่ข้างในหลัง reverse-proxy เห็นเฉพาะเมื่อพอร์ตเผลอเปิด (2375/5000/6443)</td></tr>
+    <tr><td class="c"><b>6</b></td><td>Windows ที่มี PHP</td><td class="c"><b>70%</b></td><td>เห็น IIS/Windows จาก header + XAMPP/Wamp + โยง CVE-2024-4577</td></tr>
+    <tr><td class="c"><b>7</b></td><td>ระบบทดสอบ/เก่า/สำรอง</td><td class="c"><b>75%</b></td><td>มักรั่วให้เห็น (.git/.env/backup/phpinfo) + เดาจากซับโดเมน (dev/uat/staging)</td></tr>
+    <tr><td class="c"><b>8</b></td><td>ผู้ให้บริการภายนอกดูแล (Hosting/Cloud)</td><td class="c"><b>45%</b></td><td>อนุมานประเภทโฮสต์ได้ แต่ "ใครดูแล" เป็นข้อมูลเชิงองค์กร ตรวจทางเทคนิคไม่ได้</td></tr>
+    <tr style="background:#EAF1FD"><td class="c"><b>—</b></td><td><b>ค่าเฉลี่ยทั้ง 8 กลุ่ม</b></td><td class="c"><b style="color:var(--blue)">65%</b></td><td>เห็นจากภายนอกได้ราว 2 ใน 3 ที่เหลือต้องยืนยันบนเครื่อง</td></tr>
+  </table>
+  <div class="note"><b>หลักการ:</b> ยิ่งระบบ "โชว์เวอร์ชัน/ร่องรอยออกมาเอง" → % ยิ่งสูง · ยิ่งพื้นผิวเสี่ยง "ซ่อนข้างใน หรือเป็นข้อมูลองค์กร" → % ยิ่งต่ำ</div>
+</section>
+
+<section id="report">
+  <h2>8 · การอ่านรายงาน + ที่เก็บผลลัพธ์</h2>
+  <h3>output อยู่ที่ไหน</h3>
+  <p>หลังสแกนเสร็จ ผลลัพธ์เก็บอัตโนมัติที่ (แยกโฟลเดอร์ย่อยตามวันเวลาของการสแกนแต่ละครั้ง):</p>
+  <div class="note">
+    <b>macOS / Linux:</b> <code>~/Documents/RMUT_CERT_Reports/&lt;วันเวลา&gt;/</code><br>
+    <b>Windows:</b> <code>Documents\RMUT_CERT_Reports\&lt;วันเวลา&gt;\</code> (ใช้ My Documents จริง เลี่ยงปัญหา OneDrive)<br>
+    <span style="color:var(--muted)">ตัวอย่าง: ~/Documents/RMUT_CERT_Reports/20261103_174449/</span>
+  </div>
+  <h3>ไฟล์ที่ได้ (5 ชนิด)</h3>
+  <table>
+    <tr><th>ไฟล์</th><th>ใช้ทำอะไร</th></tr>
+    <tr><td><code>report_*.pdf</code></td><td>รายงานฉบับทางการ สำหรับผู้บริหาร</td></tr>
+    <tr><td><code>dashboard_*.html</code></td><td>แดชบอร์ดสรุปผลแบบอินเทอร์แอกทีฟ เปิดในเบราว์เซอร์</td></tr>
+    <tr><td><code>report_*.xlsx</code></td><td>ตาราง Excel แจกแจงพอร์ต/ช่องโหว่ (5 ชีต)</td></tr>
+    <tr><td><code>report_*_thaicert.csv</code></td><td>สรุปผลตาม 8 กลุ่ม ThaiCERT</td></tr>
+    <tr><td><code>pipeline_*.json</code></td><td>ข้อมูลดิบ + หลักฐานเชิงเทคนิค (Chain of Custody)</td></tr>
+  </table>
+  <p>เปิดเร็ว: GUI กดเมนู <b>"แฟ้มรายงาน &amp; ผลลัพธ์"</b> · CLI เปลี่ยนที่เก็บด้วย <code>--output-dir &lt;path&gt;</code> · ถ้าเขียน Documents ไม่ได้ จะไล่หาที่สำรองอัตโนมัติ (ข้างตัวโปรแกรม → ~/RMUT_CERT_Reports → reports/)</p>
+  <h3>การให้คะแนนความเสี่ยง</h3>
+  <p>คะแนนคิดจาก <b>Σ (CVSS × น้ำหนักตามสถานะ) ÷ 10 × 100</b> → ยิ่งรุนแรงและยิ่งยืนยันแน่ชัด คะแนนยิ่งสูง แบ่งระดับ:</p>
+  <p><span class="pill p-crit">Critical</span> สูง เร่งแก้ &nbsp; <span class="pill p-warn">Warning</span> ปานกลาง ควรตรวจ &nbsp; <span class="pill p-safe">Safe</span> ต่ำ เฝ้าระวัง</p>
+  <div class="note"><b>วิธีอ่าน:</b> ดูระดับรวมก่อน แล้วไล่ "สถานะ" รายช่องโหว่ — <b>vulnerable</b> จัดการก่อน · <b>unknown</b> ไปยืนยันบนเครื่อง</div>
+  <div class="warn-box"><b>ข้อควรระวัง:</b> ไฟล์ <code>pipeline_*.json</code> และผลสแกนเป็น <b>ข้อมูลจริง</b> ควรเก็บเป็นความลับ อย่าอัปขึ้น GitHub/ที่สาธารณะ</div>
+</section>
+
+<section id="apps">
+  <h2>9 · การประยุกต์ใช้งาน</h2>
+  <div class="grid">
+    <div class="card"><b>ตรวจสุขภาพเป็นระยะ</b><br>สแกนเว็บ/ระบบของมหาวิทยาลัยตามรอบ เฝ้าระวังช่องโหว่ใหม่</div>
+    <div class="card"><b>คัดกรองก่อนตรวจลึก</b><br>ใช้ recon/triage ชี้เป้าระบบเสี่ยง ก่อนลงมือตรวจเชิงลึก</div>
+    <div class="card"><b>รายงานตามมาตรฐาน</b><br>ออกรายงานแมป 8 กลุ่ม ThaiCERT ส่งผู้บริหาร/หน่วยงานกำกับ</div>
+    <div class="card"><b>ตามรอยระบบเก่า/EOL</b><br>ค้นไฟล์รั่ว ระบบหมดอายุ บริการที่ไม่ควรเปิดสาธารณะ</div>
+  </div>
+</section>
+
+<section id="impact">
+  <h2>10 · ผลกระทบที่อาจเกิดขึ้น</h2>
+  <h3>ด้านกฎหมาย &amp; ความปลอดภัย</h3>
+  <div class="danger-box">
+    <ul style="margin:0">
+      <li><b>ใช้เฉพาะระบบที่ได้รับอนุญาต</b> — ระบบที่เป็นเจ้าของ หรือได้รับอนุญาตเป็นลายลักษณ์อักษร · การสแกนระบบผู้อื่นผิดกฎหมาย</li>
+      <li><b>ยิงคำขอจริงไปเป้าหมาย</b> — สร้างทราฟฟิกจริง และโหมด RCE อาจกระทบการทำงานของระบบปลายทาง</li>
+      <li><b>ผู้ใช้รับผิดชอบเอง</b> — ซอฟต์แวร์ให้มา "ตามสภาพ" ควรนัดหมายช่วงเวลาสแกนกับเจ้าของระบบก่อน</li>
+    </ul>
+  </div>
+  <h3>ข้อจำกัดความแม่นยำ</h3>
+  <div class="grid">
+    <div class="card"><b>ต้องยืนยันบนเครื่อง</b><br>เพดาน ~65% (remote unauth) — ผลหลายอย่างต้องตรวจซ้ำที่ตัวเครื่อง</div>
+    <div class="card"><b>False positive / negative</b><br>banner ที่ถูกปิด/ปลอม ทำให้เตือนเกินจริงหรือพลาดได้</div>
+    <div class="card"><b>การนับเครื่องซ้ำ</b><br>http/https และหลายโดเมนบน IP เดียว อาจถูกนับเป็นหลายเครื่อง</div>
+    <div class="card"><b>Online CVE มีลิมิต</b><br>บริการ CIRCL เป็นของฟรี อาจถูกจำกัดอัตราชั่วคราว</div>
+  </div>
+</section>
+
+<section id="faq">
+  <h2>11 · คำถามที่พบบ่อย (เชิงลึก)</h2>
+
+  <h3 id="faq-rapid7">เทียบ "ความแม่น" กับ Rapid7 ได้ไหม?</h3>
+  <p><b>ตอบตรงๆ: ยังไม่เทียบชั้น</b> และไม่ควรเคลมแบบนั้น เหตุผล:</p>
+  <ul>
+    <li><b>วิธีตรวจต่างระดับราก:</b> Rapid7 สแกนแบบ <b>credentialed</b> (ล็อกอิน/มี agent) อ่านเวอร์ชันแพตช์จริงจากในเครื่อง · เครื่องมือเราตรวจจากภายนอกแบบไม่ล็อกอินเท่านั้น</li>
+    <li><b>คลังช่องโหว่:</b> Rapid7 มีทีมอัปเดตรายวัน ครอบคลุม 100,000+ CVE ทุกชั้น · เครื่องมือเราคลังเล็ก เขียนมือ + เจาะจงบางเทคโนโลยี</li>
+    <li><b>การ validate:</b> Rapid7 มี QA/asset model/การยืนยัน · เครื่องมือเรายังพบบั๊กการจับคู่เวอร์ชันได้ (เราเพิ่งแก้ไป)</li>
+  </ul>
+  <div class="ok-box"><b>จุดแข็งของเรา:</b> ออกแบบเพื่อ RMUT CERT โดยเฉพาะ — ไฟล์เดียว รายงานไทย แมป 8 กลุ่ม ThaiCERT มี RCE verify + chain-of-custody · เหมาะเป็น <b>เครื่องมือคัดกรอง/triage จากภายนอก</b> ที่เสริม ไม่ใช่แทนสแกนเนอร์ระดับองค์กร</div>
+
+  <h3 id="faq-online">Online CVE ทำงานยังไง · จะโดนแบนไหม?</h3>
+  <p>เรียก API ฟรี <b>CIRCL cve-search</b> (<code>cve.circl.lu</code>) ยิง 1 ครั้งต่อ 1 (ผู้ผลิต, ผลิตภัณฑ์) ที่ตรวจพบ แล้วกรองเฉพาะ CVE ที่เวอร์ชันเข้าข่าย</p>
+  <p><b>สิ่งที่ช่วยไม่ให้ยิงมากเกิน:</b> มี <b>แคชต่อผลิตภัณฑ์ทั้ง process</b> (สแกน 200 โฮสต์ที่เป็น NGINX เหมือนกัน ยิงจริงครั้งเดียว), จำกัด <b>ขนานไม่เกิน 6</b>, ใช้ User-Agent ซื่อสัตย์, และถ้า error/ถูกบล็อก จะหยุดเงียบ ไม่กระหน่ำ</p>
+  <div class="warn-box"><b>โอกาสโดนแบน: ต่ำสำหรับใช้งานปกติ</b> อย่างแย่สุดคือโดน rate-limit ชั่วคราวแล้วรอบนั้นไม่ได้ผล online (ไม่ล่ม) · จุดที่ควรระวัง: ยังไม่มี backoff/honor 429, แคชไม่เก็บลงดิสก์, และ <code>api.macvendors.com</code> (โหมด LAN) ลิมิตเข้มกว่า</div>
+
+  <h3 id="faq-dup">ทำไมผลสแกนบางเครื่อง "ข้อมูลซ้ำซ้อน"?</h3>
+  <p>เพราะหลาย "target (URL)" จริงๆ คือ <b>เครื่องเดียวกัน</b>:</p>
+  <ul>
+    <li><b>Shared/virtual hosting:</b> หลายชื่อโดเมนชี้ IP เดียวกัน (เช่น 1 IP โฮสต์ 28 โดเมน = สแกน 112 รายการ แต่เป็นเครื่องเดียว)</li>
+    <li><b>http + https + พอร์ต:</b> ชื่อโฮสต์เดียวถูกยิงทั้ง <code>http://</code> และ <code>https://</code> (และ :8080/:8443) แยกกัน · ถ้า https redirect ไป http = เว็บเดียวกัน ผลเลยเหมือนกันเป๊ะ</li>
+    <li><b>เครื่องมือรายงานต่อ URL</b> และยังไม่ dedup ตาม IP → เครื่องเดียวโผล่หลายแถว</li>
+  </ul>
+  <div class="note">แนวทางแก้ในอนาคต: ยุบรวมผลตาม IP ที่ resolve ได้ หรือกรอง http/https ที่ลงเอย base_url เดียวกัน</div>
+</section>
+
+<section id="bestpractice">
+  <h2>12 · แนวปฏิบัติที่ดี</h2>
+  <ol>
+    <li><b>ขออนุญาต/นัดหมายเจ้าของระบบก่อนสแกนทุกครั้ง</b></li>
+    <li><b>ถือผลเป็นการ "คัดกรอง"</b> แล้วยืนยันซ้ำบนเครื่อง (โดยเฉพาะสถานะ unknown)</li>
+    <li><b>ใช้คู่กับ credentialed scanner</b> สำหรับงานที่ต้องการความแม่นสูง</li>
+    <li><b>อัปเดตคลัง CVE</b> และทบทวนผลลัพธ์อย่างสม่ำเสมอ</li>
+    <li><b>เก็บผลสแกนเป็นความลับ</b> อย่าอัปขึ้นที่สาธารณะ</li>
+  </ol>
+  <div class="foot">
+    Security Audit Toolkit v6.5 · ความร่วมมือ สกมช. (NCSA) × RMUT CERT<br>
+    คู่มือฉบับละเอียด — รวมเนื้อหานำเสนอ + คำถามเชิงลึก + วิธีดาวน์โหลดและติดตั้ง
+  </div>
+</section>
+</main>
+</div>
+</body>
+</html>
