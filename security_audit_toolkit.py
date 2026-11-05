@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-security_audit_toolkit.py — Security Audit Toolkit (RMUT CERT) v6.5.1
+security_audit_toolkit.py — Security Audit Toolkit (RMUT CERT) v6.5.2
 Scanner (14 CVEs) + RCE Verify (chain-of-custody) + Report Generator (PDF/CSV/Excel/HTML)
 + Cross-Menu Navigation + CVE Display + File Browser (GUI & Interactive CLI)
 
@@ -86,7 +86,7 @@ font_manager = None
 # SECTION 1 — Constants
 # ═══════════════════════════════════════════════════════════════════════
 
-VERSION = "6.5.1"
+VERSION = "6.5.2"
 _OWN_TARGET = False     # ตั้งเป็น True เมื่อใช้ --i-own-this-target
 _NO_INTERACTIVE = False # True เมื่อใช้ --no-interactive (headless / GUI mode)
 _SCAN_DEPTH = 2         # ความลึกการ crawl (--depth)
@@ -312,6 +312,21 @@ def _esc_pdf(t):
                  ("🔴", ""), ("🟢", "")]:
         t = t.replace(a, b)
     return t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _csv_safe(v):
+    """กัน CSV/Excel formula injection: ถ้าค่าเป็นสตริงที่ขึ้นต้นด้วย = + - @ (หรือ tab/CR)
+    ใส่ ' นำหน้าเพื่อให้ Excel/Sheets/LibreOffice มองเป็นข้อความ ไม่ประเมินเป็นสูตร
+    (ค่าที่ไม่ใช่สตริง เช่น ตัวเลข ปล่อยไว้ตามเดิมเพื่อคงชนิดข้อมูล/การคำนวณ)
+    ใช้ครอบทุกค่าที่มาจากข้อมูลสแกน (Server header ฯลฯ) ก่อนเขียนลง CSV/openpyxl"""
+    if isinstance(v, str) and v and v[0] in "=+-@\t\r":
+        return "'" + v
+    return v
+
+
+def _csv_row(cells):
+    """ครอบ _csv_safe ให้ทุกช่องในแถว แล้วคืนลิสต์พร้อมเขียน"""
+    return [_csv_safe(c) for c in cells]
 
 OS_PATTERNS = [(re.compile(r"ubuntu", re.I), "Ubuntu"),
                (re.compile(r"debian", re.I), "Debian"),
@@ -870,10 +885,23 @@ def is_noisy(path):
 
 
 def is_private_host(url):
-    host = urlparse(url).hostname or ""
-    return bool(re.match(
-        r"^(127\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|localhost$)",
-        host))
+    """โฮสต์เป็นเครือข่ายภายใน/ไม่ใช่ที่อยู่สาธารณะหรือไม่ (ใช้เป็น gate อนุญาตสแกน)
+    ครอบคลุม loopback, RFC1918, link-local (169.254 — รวม cloud metadata),
+    CGNAT (100.64/10), 0.0.0.0, และ IPv6 (::1, fc00::/7, fe80::/10) รวมถึงรูป
+    เลขฐานสิบ/ฐานสิบหกของ IPv4 (เช่น 2130706433) ผ่าน ipaddress แทน regex ที่หลบเลี่ยงได้"""
+    host = (urlparse(url).hostname or "").strip().strip("[]").lower().rstrip(".")
+    if not host:
+        return False
+    if host == "localhost" or host.endswith(".localhost"):
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False   # เป็นชื่อโดเมน — ยังไม่ resolve จึงไม่ถือว่าเป็น private ที่นี่
+    if ip.version == 4 and ip in ipaddress.ip_network("100.64.0.0/10"):
+        return True    # CGNAT
+    return bool(ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_unspecified)
 
 
 def normalize_target(target):
@@ -903,6 +931,10 @@ def extract_domain(raw):
         return None                      # ต้องมีจุด (TLD) จึงจะถือว่าเป็นโดเมน
     if not re.match(r"^[a-z0-9.\-_:]+$", host) or host.startswith("_"):
         return None                      # อักขระที่ไม่ใช่โดเมน (หรือเป็น record ภายในที่ขึ้นต้นด้วย _)
+    # ปฏิเสธ label ที่ขึ้นต้น/ลงท้ายด้วย '-' (ไม่ใช่ชื่อโฮสต์ที่ถูกต้อง และกัน argument injection:
+    # host เช่น "-oG.evil.com" ที่หลุดไปเป็น argv ของ nmap/ping จะถูกมองเป็น option)
+    if any(lbl[:1] == "-" or lbl[-1:] == "-" for lbl in host.split(".")):
+        return None
     if port and port not in (80, 443):
         return f"{host}:{port}"
     return host
@@ -946,15 +978,78 @@ def read_host_list_file(path):
                    "skip_samples": skipped}
 
 
-def make_session(no_verify=False):
-    s = requests.Session()
+MAX_BODY_BYTES = 5 * 1024 * 1024  # เพดานขนาด body (หลังคลายบีบอัด) กัน OOM / gzip bomb จากเซิร์ฟเวอร์ที่ไม่น่าเชื่อถือ
+
+
+def _cap_response(r, limit=MAX_BODY_BYTES):
+    """อ่าน body แบบสตรีมไม่เกิน limit ไบต์ (หลังคลายบีบอัดแล้ว) แล้วตรึงเป็น r._content
+    เพื่อให้ r.text / r.content / r.json() ใช้ได้ตามปกติแต่ไม่โหลดทั้งก้อนเข้า memory
+    (iter_content คืนไบต์ที่คลาย gzip แล้ว จึงหยุดที่ limit ได้ก่อน zip bomb จะขยายเต็ม)"""
+    try:
+        buf = bytearray()
+        for chunk in r.iter_content(8192):
+            if chunk:
+                buf += chunk
+                if len(buf) >= limit:
+                    break
+        r._content = bytes(buf[:limit])
+        r._content_consumed = True
+    except Exception:
+        pass  # อ่านไม่สำเร็จ — ปล่อย r คงสภาพ ให้ผู้เรียกจัดการ exception ตามเดิม
+    finally:
+        try:
+            r.close()
+        except Exception:
+            pass
+    return r
+
+
+class _ScanSession(requests.Session):
+    """Session สำหรับการสแกน:
+    (1) จำกัดขนาด body ที่อ่านเสมอ (กัน OOM / zip bomb จากเซิร์ฟเวอร์ที่ควบคุมไม่ได้)
+    (2) tls_tolerant=True → ถ้า verify ใบรับรองล้มเหลว (self-signed/หมดอายุ/CA ไม่รู้จัก/
+        ชื่อไม่ตรง) จะลองใหม่แบบไม่ verify เพื่อให้ยังสแกนโฮสต์นั้นได้ (ปัญหาใบรับรองเองเป็น
+        ช่องโหว่ และถูกตรวจ/รายงานแยกผ่าน _probe_tls / fp['cert_problem'] อยู่แล้ว)
+    ใช้ tls_tolerant=True เฉพาะกับ 'เป้าหมายที่สแกน' เท่านั้น ส่วนการเรียก API ภายนอกที่
+    เชื่อถือได้ (crt.sh ฯลฯ) ต้องใช้ tls_tolerant=False เพื่อไม่ยอมรับใบรับรองปลอมเมื่อโดน MITM"""
+    tls_tolerant = True
+
+    def __init__(self):
+        super().__init__()
+        self.tls_insecure = False
+
+    def request(self, method, url, **kwargs):
+        caller_stream = kwargs.get("stream", None)
+        kwargs["stream"] = True  # สตรีมเสมอเพื่อคุมขนาดการอ่าน
+        try:
+            r = super().request(method, url, **kwargs)
+        except requests.exceptions.SSLError:
+            # ปิด verify อยู่แล้วแต่ยัง SSLError → handshake พังจริง (ไม่ใช่เรื่องความน่าเชื่อถือใบรับรอง)
+            if (not self.tls_tolerant) or kwargs.get("verify", self.verify) is False:
+                raise
+            import urllib3
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            self.tls_insecure = True
+            kwargs["verify"] = False
+            r = super().request(method, url, **kwargs)
+        if caller_stream:
+            return r            # ผู้เรียกขอสตรีมเอง (เช่น อ่านแค่ header) — ไม่แตะ body
+        return _cap_response(r)
+
+
+def make_session(no_verify=False, tls_tolerant=True):
+    s = _ScanSession()
+    # ทนใบรับรองเฉพาะเป้าหมายที่สแกน; ปิดเมื่อเรียก API ภายนอกที่เชื่อถือได้ หรือเมื่อ no_verify
+    s.tls_tolerant = bool(tls_tolerant) and not no_verify
     s.verify = not no_verify
+    s.max_redirects = 5          # จำกัด redirect กันลูป/ไล่เข้าโฮสต์ภายใน (ลดพื้นผิว SSRF)
     s.headers.update({"User-Agent": DEFAULT_UA, "Accept": "*/*"})
     retry = Retry(total=1, backoff_factor=0,
                   status_forcelist=[429, 500, 502, 503, 504])
     s.mount("http://", HTTPAdapter(max_retries=retry))
     s.mount("https://", HTTPAdapter(max_retries=retry))
     if no_verify:
+        s.tls_insecure = True
         import urllib3
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
     return s
@@ -2059,6 +2154,10 @@ def _probe_os(host, fp, timeout, lan=False):
     เชื่อมั่นสูงขึ้น (0–1 hop → initial TTL เกือบตรงเป๊ะ)"""
     import shutil
     import subprocess
+    # กัน argument injection ที่ปลายทาง: host ที่ขึ้นต้นด้วย '-' จะถูก nmap/ping มองเป็น option
+    # (nmap ไม่รองรับ '--' แยก end-of-options อย่างน่าเชื่อถือ จึงต้องกรองที่นี่ด้วย)
+    if not host or host.startswith("-"):
+        return
     # 1) Server header — ตั้งไว้แล้วตอน fingerprint ถ้า Apache รั่ว OS token
     if fp.get("os_version"):
         fp["os_source"] = fp.get("os_source") or "Server header"
@@ -2978,7 +3077,7 @@ def _crawl(session, base, prefix, max_depth, max_pages, timeout, verbose=False, 
                 endpoints[path]["params"].update(parse_qs(p.query).keys())
             parser = _LinkParser()
             try: parser.feed(r.text)
-            except: pass
+            except Exception: pass
             for form in parser.forms:
                 action = urljoin(url, form["action"])
                 if not action.startswith(origin): continue
@@ -3093,7 +3192,7 @@ def _test_lfi(session, base, path, param, baseline_hash, timeout, rate):
                         results.append({"evidence": "PHP source via php://filter",
                                         "confidence": "high", "payload": payload,
                                         "sample": dec[:80].decode("utf-8", "replace")})
-                except: pass
+                except Exception: pass
         lower = text.lower()
         if any(e in lower for e in PHP_ERR_MARKERS):
             if not any(x["confidence"] == "high" for x in results):
@@ -4257,8 +4356,10 @@ def resolve_cidr(cidr, max_hosts=4096):
 
 
 def _subdomain_session():
-    """Session สำหรับ subdomain discovery — ใช้ make_session() เพื่อให้ retry/headers ถูกต้อง"""
-    s = make_session(no_verify=False)
+    """Session สำหรับ subdomain discovery — เรียก API ภายนอกที่เชื่อถือได้ (crt.sh/hackertarget/
+    alienvault/anubis/rapiddns/c99) จึงบังคับ verify ใบรับรองเข้ม (tls_tolerant=False)
+    ไม่ให้ยอมรับใบรับรองปลอมเมื่อโดน MITM — ซึ่งต่างจาก session ที่ใช้สแกนเป้าหมายจริง"""
+    s = make_session(no_verify=False, tls_tolerant=False)
     return s
 
 
@@ -4472,7 +4573,7 @@ def resolve_wildcard(domain, bruteforce=False, wordlist=None, st_key=None,
                 try:
                     dns.resolver.resolve(f"{w}.{domain}", "A", lifetime=3)
                     with lock: subs.add(f"{w}.{domain}".lower())
-                except: pass
+                except Exception: pass
             with ThreadPoolExecutor(max_workers=50) as ex:
                 list(ex.map(try_dns, words))
             print(f"    → +{len(subs)-before}")
@@ -4817,7 +4918,7 @@ def _autodetect_lfi(session, target, timeout, logger):
     try:
         r = session.get(origin + "/rmutcert-nonexist-" + uuid.uuid4().hex[:6], timeout=timeout)
         baseline_text = r.text
-    except: baseline_text = None
+    except Exception: baseline_text = None
 
     while queue and len(visited) < 30:
         url = queue.pop(0)
@@ -6002,6 +6103,25 @@ _EMBEDDED_FONT_BOLD_B64 = "AAEAAAANAIAAAwBQR0RFRg26DwwAALboAAAAbkdQT1NlvzQNAAC3W
 _EMB_CACHE = {}
 
 
+def _safe_tmp_dir():
+    """โฟลเดอร์ชั่วคราวเฉพาะผู้ใช้ (สิทธิ์ 0700) ใต้ temp dir ของระบบ — กันผู้ใช้อื่นบนเครื่อง
+    ที่แชร์กัน (/tmp) มาวาง symlink หรือไฟล์ดักไว้ล่วงหน้าตาม path ที่เดาได้ เพราะเขียนเข้า
+    โฟลเดอร์ที่เป็นของเรา 0700 ไม่ได้"""
+    import tempfile
+    try:
+        uid = str(os.getuid())
+    except AttributeError:
+        import getpass
+        uid = getpass.getuser()
+    d = os.path.join(tempfile.gettempdir(), f"rmut_toolkit_{uid}")
+    os.makedirs(d, mode=0o700, exist_ok=True)
+    try:
+        os.chmod(d, 0o700)
+    except OSError:
+        pass
+    return d
+
+
 def _embedded_font(bold=False):
     """เขียนฟอนต์ที่ฝังไว้ลงไฟล์ชั่วคราวแล้วคืน path (แคชไว้) — None ถ้าไม่มีฟอนต์ฝัง"""
     import base64 as _b64
@@ -6014,7 +6134,7 @@ def _embedded_font(bold=False):
         return None
     try:
         data = _b64.b64decode(b64)
-        p = os.path.join(tempfile.gettempdir(), f"rmut_embed_{key}.ttf")
+        p = os.path.join(_safe_tmp_dir(), f"rmut_embed_{key}.ttf")
         if not (os.path.exists(p) and os.path.getsize(p) == len(data)):
             with open(p, "wb") as fh:
                 fh.write(data)
@@ -6073,7 +6193,7 @@ def _ensure_pdf_ttf(path):
         return path
     try:
         import tempfile
-        cache = Path(tempfile.gettempdir()) / ("rmut_" + safe_name(Path(path).stem) + ".ttf")
+        cache = Path(_safe_tmp_dir()) / ("rmut_" + safe_name(Path(path).stem) + ".ttf")
         if cache.exists() and cache.stat().st_size > 0:
             return str(cache)
         from fontTools.ttLib import TTFont as _FT, newTable
@@ -6995,7 +7115,7 @@ def _build_pdf(data, charts, output_path, font):
                                        ("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0),
                                        ("TOPPADDING", (0, 0), (-1, -1), 1), ("BOTTOMPADDING", (0, 0), (-1, -1), 1),
                                        ("VALIGN", (0, 0), (-1, -1), "MIDDLE")]))
-            rows.append([P(lab, st("bl", fontSize=9.5, leading=12)), track,
+            rows.append([P(_esc_pdf(lab), st("bl", fontSize=9.5, leading=12)), track,
                          P(f"<b>{val}</b>", st("bv", fontSize=10, leading=12, alignment=TA_RIGHT))])
         t = Table(rows, colWidths=[label_w * cm, bar_w * cm, val_w * cm])
         t.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
@@ -7515,8 +7635,8 @@ def _build_pdf(data, charts, output_path, font):
                 cc = h["counts"]
                 pri_rows.append([
                     P(str(i), _pri_c_ctr),
-                    P(h["host"], _pri_c),
-                    P((h["server"] or "?").split()[0], _pri_c_ctr),
+                    P(_esc_pdf(h["host"]), _pri_c),
+                    P(_esc_pdf((h["server"] or "?").split()[0]), _pri_c_ctr),
                     P(f"{h['max_cvss']:.1f}" if h["max_cvss"] else "—", _pri_red if h["max_cvss"] >= 9.0 else _pri_c_ctr),
                     P(str(h["risk_score"]), _pri_c_ctr),
                     P(str(cc["vulnerable"]) if cc["vulnerable"] else "—",
@@ -7553,10 +7673,10 @@ def _build_pdf(data, charts, output_path, font):
             for i, r in enumerate(vuln_items, 1):
                 _stat_lbl = STATUS_LABELS.get(r.get("status"), r.get("status"))
                 _stat_exp = STATUS_EXPLAIN.get(r.get("status"), "")
-                story.append(P(f"<b>{i}. {r.get('cve','')}</b> — {r.get('name','')}<br/>"
+                story.append(P(f"<b>{i}. {_esc_pdf(r.get('cve',''))}</b> — {_esc_pdf(r.get('name',''))}<br/>"
                                f"<font color='#e03131'>สถานะ: {_stat_lbl}</font>"
                                f"{'  ↳ ' + _stat_exp if _stat_exp else ''}"
-                               f"  ·  {r.get('reason','')}", body))
+                               f"  ·  {_esc_pdf(r.get('reason',''))}", body))
                 story.append(Spacer(1, 0.14 * cm))
             story.append(PageBreak())
 
@@ -7586,8 +7706,8 @@ def _build_pdf(data, charts, output_path, font):
             _h_cvss_str = (f"{h['max_cvss']:.1f}"
                            if (h["max_cvss"] > 0 or h["risk_level"] == "safe")
                            else "-")
-            rows.append([P(h["host"], cell), P(h.get("ip", "") or "—", cell),
-                         P(h["server"], cell), P(h["php"], cell),
+            rows.append([P(_esc_pdf(h["host"]), cell), P(h.get("ip", "") or "—", cell),
+                         P(_esc_pdf(h["server"]), cell), P(_esc_pdf(h["php"]), cell),
                          P(str(h["lfi"]) if h["lfi"] else "-", cell),
                          P(str(cc["vulnerable"]) if cc["vulnerable"] else "-", cell),
                          P(str(cc["warning"]) if cc["warning"] else "-", cell),
@@ -7794,7 +7914,7 @@ def _build_pdf(data, charts, output_path, font):
                 rows = [head]
                 cellbg = []   # (col,row,color)
                 for ri, h in enumerate(mrows_src, 1):
-                    row = [P(h["host"], cell)]
+                    row = [P(_esc_pdf(h["host"]), cell)]
                     for cj, c in enumerate(cset, 1):
                         glyph, bg, fg = _mcell(h, c)
                         row.append(P(glyph, ParagraphStyle("gc%d%d" % (ri, cj), parent=gcell, textColor=colors.HexColor(fg))))
@@ -7822,7 +7942,7 @@ def _build_pdf(data, charts, output_path, font):
             for c in cols:
                 m = _cvem[c]
                 lg.append([P(_code[c], cell), P(c, cell), P(m["cat"], cell),
-                           P(m["sev"] or "-", cell), P((m["name"] or "")[:46], cell)])
+                           P(m["sev"] or "-", cell), P(_esc_pdf((m["name"] or "")[:46]), cell)])
             lt = Table(lg, colWidths=[1.3 * cm, 3.4 * cm, 1.8 * cm, 2.3 * cm, 7.0 * cm], repeatRows=1)
             lt.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), RMUT_BLUE),
                                     ("FONTNAME", (0, 0), (-1, -1), font), ("FONTSIZE", (0, 0), (-1, -1), 7.5),
@@ -7878,7 +7998,7 @@ def _build_pdf(data, charts, output_path, font):
                 rep = max(members, key=lambda x: x["risk_score"])  # ตัวแทนของกลุ่ม
                 hosts_line = ", ".join(m["host"] for m in members)
                 story.append(P(f"รูปแบบที่ {gi}  "
-                               f"<font size=8 color='#6b7280'>· {len(members)} โฮสต์ · คะแนน ~{rep['risk_score']}/100 · {rep['server']}</font>", h2))
+                               f"<font size=8 color='#6b7280'>· {len(members)} โฮสต์ · คะแนน ~{rep['risk_score']}/100 · {_esc_pdf(rep['server'])}</font>", h2))
                 story.append(P(f"<font size=8 color='#6b7280'>โฮสต์ในกลุ่มนี้: {hosts_line}</font>",
                                st("grp", fontSize=8, leading=11, leftIndent=8, textColor=GREY)))
                 for r in rep["top"][:12]:
@@ -7889,8 +8009,8 @@ def _build_pdf(data, charts, output_path, font):
                     _stat_exp = STATUS_EXPLAIN.get(r.get("status"), "")
                     _exp_txt = (f"<br/><font size=7.5 color='{col}'>"
                                 f"↳ {_stat_exp}</font>" if _stat_exp and _bkt in ("vulnerable", "warning", "unknown") else "")
-                    _reason_txt = r.get("reason", "")[:200]
-                    story.append(P(f"• <b>{r.get('cve','')}</b> ({r.get('category','')}, CVSS {_cvss(r):.1f} · EPSS {int(_epss(r)*100)}% · {_cwe(r)}) — {r.get('name','')} "
+                    _reason_txt = _esc_pdf(r.get("reason", "")[:200])
+                    story.append(P(f"• <b>{_esc_pdf(r.get('cve',''))}</b> ({_esc_pdf(r.get('category',''))}, CVSS {_cvss(r):.1f} · EPSS {int(_epss(r)*100)}% · {_cwe(r)}) — {_esc_pdf(r.get('name',''))} "
                                    f"<font color='{col}'>[{_stat_lbl}]</font>"
                                    f"{_exp_txt}"
                                    f"<br/><font size=8 color='#374151'>{_reason_txt}</font>",
@@ -7957,21 +8077,21 @@ def _build_pdf(data, charts, output_path, font):
     show_rows = sorted_results
     for r in show_rows:
         if _multi_cols:
-            rows.append([P(_host_label(r.get("target", "")), cell), P(r.get("cve", ""), cell),
+            rows.append([P(_esc_pdf(_host_label(r.get("target", ""))), cell), P(r.get("cve", ""), cell),
                          P(f"{_cvss(r):.1f}", cell), P(f"{int(_epss(r)*100)}%", cell),
-                         P(r.get("name", ""), cell), P(r.get("category", ""), cell),
+                         P(_esc_pdf(r.get("name", "")), cell), P(r.get("category", ""), cell),
                          P(r.get("severity", "").split("(")[0].strip(), cell),
                          P(STATUS_LABELS.get(r.get("status"), r.get("status", "")), cell)])
         else:
             rows.append([P(r.get("cve", ""), cell), P(f"{_cvss(r):.1f}", cell), P(f"{int(_epss(r)*100)}%", cell),
-                         P(r.get("name", ""), cell), P(r.get("category", ""), cell),
+                         P(_esc_pdf(r.get("name", "")), cell), P(r.get("category", ""), cell),
                          P(r.get("severity", "").split("(")[0].strip(), cell),
                          P(STATUS_LABELS.get(r.get("status"), r.get("status", "")), cell),
-                         P(r.get("reason", "")[:80], cell)])
+                         P(_esc_pdf(r.get("reason", "")[:80]), cell)])
     if not show_rows:
         _unreach_err = (data["hosts"][0].get("error") if data.get("hosts") else "") or "ไม่สามารถเชื่อมต่อเป้าหมายได้ขณะสแกน"
         if _multi_cols:
-            rows.append([P(_host_label(data.get("target", "-")), cell), P("-", cell),
+            rows.append([P(_esc_pdf(_host_label(data.get("target", "-"))), cell), P("-", cell),
                          P("-", cell), P("-", cell), P("ไม่สามารถตรวจสอบได้", cell),
                          P("-", cell), P("-", cell), P(_unreach_err[:60], cell)])
         else:
@@ -8087,7 +8207,7 @@ def _build_pdf(data, charts, output_path, font):
                 days = SLA_DAYS.get(worst, 30)
                 crit = "สูง" if h.get("crit_asset", 1) >= 2 else "ปกติ"
                 sla = f"ภายใน {days} วัน" if days else "ตามรอบ"
-                qrows.append([P(str(i), cell), P(h["host"], cell), P(crit, cell),
+                qrows.append([P(str(i), cell), P(_esc_pdf(h["host"]), cell), P(crit, cell),
                               P(f"{h.get('max_cvss',0):.1f}" if h.get('max_cvss', 0) else "—", cell),
                               P(f"{int(h.get('max_epss',0)*100)}%" if h.get('max_epss', 0) else "—", cell),
                               P(sla, cell)])
@@ -8382,11 +8502,11 @@ def _export_csv(data, path):
             host_lbl = _host_label(r.get("target", "")) or data["target"]
             eff_cvss = _assessed_cvss(r)
             cvss_str = f"{eff_cvss:.1f}" if eff_cvss is not None else "—"
-            w.writerow([host_lbl, ip_lookup.get(host_lbl, ""), r.get("cve", ""),
+            w.writerow(_csv_row([host_lbl, ip_lookup.get(host_lbl, ""), r.get("cve", ""),
                         cvss_str, f"{int(_epss(r)*100)}%", _cwe(r), _sla_days(r),
                         r.get("name", ""), r.get("category", ""), r.get("severity", ""),
                         STATUS_LABELS.get(r.get("status"), r.get("status", "")),
-                        r.get("reason", ""), r.get("host_check", "")])
+                        r.get("reason", ""), r.get("host_check", "")]))
 
 
 def _export_thaicert_csv(data, path):
@@ -8475,9 +8595,9 @@ def _export_ip_csv(data, path):
             top_cves = "; ".join(all_cves[:10])
             hostnames = "; ".join(h["host"] for h in hosts)
             ip_type = "Public" if pub is True else ("Private" if pub is False else "Unknown")
-            w.writerow([d["ip"], ip_type, len(hosts), len(reachable),
+            w.writerow(_csv_row([d["ip"], ip_type, len(hosts), len(reachable),
                         crit, warn, unk, safe, len(unreachable),
-                        (f"{max_cvss:.1f}" if (max_cvss > 0 or worst == "safe") else "—"), max_idx, worst, top_cves, hostnames])
+                        (f"{max_cvss:.1f}" if (max_cvss > 0 or worst == "safe") else "—"), max_idx, worst, top_cves, hostnames]))
 
         # ── ส่วน 2: รายโฮสต์ต่อ IP (แบบละเอียด) ──
         w.writerow([])
@@ -8491,12 +8611,12 @@ def _export_ip_csv(data, path):
                 cc = h["counts"]
                 top = "; ".join(x.get("cve", "") for x in (h.get("top") or [])[:10])
                 h_cvss = f"{h.get('max_cvss', 0):.1f}" if (h["reachable"] and (h.get("max_cvss", 0) > 0 or h["risk_level"] == "safe")) else "—"
-                w.writerow([d["ip"], ip_type, h["host"],
+                w.writerow(_csv_row([d["ip"], ip_type, h["host"],
                             "yes" if h["reachable"] else "no",
                             h["server"], h["php"], h["cms"], h["lfi"],
                             h_cvss, h["risk_score"],
                             h["risk_level"] if h["reachable"] else "n/a",
-                            cc["vulnerable"], cc["warning"], cc["unknown"], cc["safe"], top])
+                            cc["vulnerable"], cc["warning"], cc["unknown"], cc["safe"], top]))
 
         # ── ส่วน 3: โฮสต์ที่ยังไม่มี IP ──
         no_ip = [h for h in data["hosts"] if not h.get("ip")]
@@ -8505,9 +8625,9 @@ def _export_ip_csv(data, path):
             w.writerow(["=== โฮสต์ที่ยังไม่มีข้อมูล IP (สแกนด้วยไฟล์ v6 ใหม่เพื่อบันทึก IP) ==="])
             w.writerow(["Host", "Reachable", "Server", "RiskLevel", "RiskIndex"])
             for h in no_ip:
-                w.writerow([h["host"], "yes" if h["reachable"] else "no",
+                w.writerow(_csv_row([h["host"], "yes" if h["reachable"] else "no",
                             h["server"], h["risk_level"] if h["reachable"] else "n/a",
-                            h["risk_score"]])
+                            h["risk_score"]]))
 
 
 def _export_host_csv(data, path):
@@ -8522,7 +8642,7 @@ def _export_host_csv(data, path):
             cc = h["counts"]
             top = "; ".join(x.get("cve", "") for x in h["top"][:6])
             a = h.get("hdr") or {}
-            w.writerow([h["host"], h.get("ip", ""), "yes" if h["reachable"] else "no",
+            w.writerow(_csv_row([h["host"], h.get("ip", ""), "yes" if h["reachable"] else "no",
                         "high" if h.get("crit_asset", 1) >= 2 else "normal",
                         h["server"], h["php"], h["cms"], h["lfi"],
                         (f"{h.get('max_cvss',0):.1f}" if (h["reachable"] and (h.get("max_cvss", 0) > 0 or h["risk_level"] == "safe")) else "—"),
@@ -8530,7 +8650,7 @@ def _export_host_csv(data, path):
                         len(a.get("missing", [])), "yes" if a.get("cookie_issues") else "no",
                         "yes" if a.get("disclosed") else "no",
                         h["risk_score"], h["risk_level"], cc["vulnerable"], cc["warning"],
-                        cc["unknown"], cc["safe"], top])
+                        cc["unknown"], cc["safe"], top]))
 
 
 def _export_excel(data, path):
@@ -8606,12 +8726,12 @@ def _export_excel(data, path):
         cf = _confirm_of(r.get("cve", "")) or {}
         eff_cvss = _assessed_cvss(r)
         cvss_cell_val = round(eff_cvss, 1) if eff_cvss is not None else "—"
-        ws1.append([row_i, host_lbl, ip_lookup.get(host_lbl, ""), r.get("cve", ""),
+        ws1.append(_csv_row([row_i, host_lbl, ip_lookup.get(host_lbl, ""), r.get("cve", ""),
                     cvss_cell_val, f"{int(_epss(r)*100)}%", _cwe(r), _sla_days(r),
                     r.get("name", ""), r.get("category", ""), r.get("severity", ""),
                     STATUS_LABELS.get(r.get("status"), r.get("status", "")),
                     r.get("reason", ""), r.get("host_check", ""),
-                    cf.get("vuln", ""), cf.get("safe", "")])
+                    cf.get("vuln", ""), cf.get("safe", "")]))
         row = ws1.max_row
         fill = _status_fill(bkt)
         sev = r.get("severity", "")
@@ -8646,7 +8766,7 @@ def _export_excel(data, path):
         cc = h["counts"]
         top = "; ".join(x.get("cve", "") for x in h["top"][:8])
         a = h.get("hdr") or {}
-        ws2.append([row_i, h["host"], h.get("ip",""),
+        ws2.append(_csv_row([row_i, h["host"], h.get("ip",""),
                     "✓" if h["reachable"] else "✗",
                     "high" if h.get("crit_asset", 1) >= 2 else "normal",
                     h["server"], h["php"], h["cms"], h["lfi"],
@@ -8656,7 +8776,7 @@ def _export_excel(data, path):
                     "yes" if a.get("disclosed") else "no",
                     h["risk_score"],
                     h["risk_level"] if h["reachable"] else "n/a",
-                    cc["vulnerable"], cc["warning"], cc["unknown"], cc["safe"], top])
+                    cc["vulnerable"], cc["warning"], cc["unknown"], cc["safe"], top]))
         row = ws2.max_row
         lv = h["risk_level"] if h["reachable"] else "n/a"
         fill = _risk_fill(lv)
@@ -8725,10 +8845,10 @@ def _export_excel(data, path):
                 cv = cve_entry.get("cve", "")
                 if cv and cv not in seen_cves: all_cves.append(cv); seen_cves.add(cv)
         ip_type = "Public" if d["pub"] is True else ("Private" if d["pub"] is False else "Unknown")
-        ws3.append([d["ip"], ip_type, len(hosts), len(reachable),
+        ws3.append(_csv_row([d["ip"], ip_type, len(hosts), len(reachable),
                     crit, warn, unk, safe, len(unreachable),
                     (round(max_cvss, 1) if (max_cvss > 0 or worst == "safe") else "—"), max_idx, worst,
-                    "; ".join(all_cves[:10]), "; ".join(h["host"] for h in hosts)])
+                    "; ".join(all_cves[:10]), "; ".join(h["host"] for h in hosts)]))
         fill = _risk_fill(worst)
         if fill:
             for col in range(1, 15): ws3.cell(ws3.max_row, col).fill = fill
@@ -8748,11 +8868,11 @@ def _export_excel(data, path):
             cc = h["counts"]
             top = "; ".join(x.get("cve", "") for x in (h.get("top") or [])[:10])
             lv = h["risk_level"] if h["reachable"] else "n/a"
-            ws3.append([d["ip"], ip_type, h["host"],
+            ws3.append(_csv_row([d["ip"], ip_type, h["host"],
                         "✓" if h["reachable"] else "✗",
                         h["server"], h["php"], h["cms"], h["lfi"],
                         (round(h.get("max_cvss", 0), 1) if (h["reachable"] and (h.get("max_cvss", 0) > 0 or h["risk_level"] == "safe")) else "—"), h["risk_score"], lv,
-                        cc["vulnerable"], cc["warning"], cc["unknown"], cc["safe"], top])
+                        cc["vulnerable"], cc["warning"], cc["unknown"], cc["safe"], top]))
             fill = _risk_fill(lv)
             if fill:
                 for col in range(1, 17): ws3.cell(ws3.max_row, col).fill = fill
@@ -9316,6 +9436,10 @@ const BKTORD={vulnerable:0,warning:1,unknown:2,safe:3};
 const SEV_ORDER={Critical:0,High:1,Medium:2,Low:3,Info:4};
 
 function esc(s){return(s==null?'':''+s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+/* escape สำหรับฝังค่าใน JS string literal ที่อยู่ในแอตทริบิวต์ onclick="..." :
+   HTML-escape (& < > ") ก่อน แล้ว backslash-escape \ และ ' (ซึ่ง esc ไม่ได้จัดการ และ
+   ใช้ HTML entity แทนไม่ได้เพราะ parser จะ decode กลับเป็น ' ก่อน JS จะเห็น) กัน XSS หลุด string */
+function jsq(s){return esc(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'")}
 function cvssColor(v){if(v==null||v===''||isNaN(v))return'#6b7280';v=parseFloat(v);if(v>=9)return'#c0392b';if(v>=7)return'#d35400';if(v>=4)return'#e67e22';if(v>0)return'#2980b9';return'#1e7e34'}
 function fmtHostCvss(h){
   if(!h||!h.reachable)return'—';
@@ -9850,7 +9974,7 @@ function renderHostTable(data){
       `;
     }
 
-    return `<tr class="${rowCls}" onclick="openDr('${esc(h.host).replace(/'/g,"\'")}')">
+    return `<tr class="${rowCls}" onclick="openDr('${jsq(h.host)}')">
       <td style="text-align:center;font-weight:700;color:var(--muted);font-size:12px;width:44px">${i+1}</td>
       <td style="min-width:200px">
         <b style="color:var(--ink);cursor:pointer">${esc(h.host)}</b>${reach}
@@ -9983,7 +10107,7 @@ function renderIPTable(data){
         ((h.vulnerable||0) + (h.warning||0))
       );
       return `<tr class="${hcls==='critical'?'critical-row':hcls==='warning'?'warning-row':hcls==='safe'?'safe-row':'unknown-row'}"
-                  onclick="openDr('${esc(h.host).replace(/'/g,"\'")}');event.stopPropagation()"
+                  onclick="openDr('${jsq(h.host)}');event.stopPropagation()"
                   style="font-size:12px;cursor:pointer">
         <td style="width:44px;text-align:center;color:var(--muted);font-weight:700;font-size:11px">${hi+1}</td>
         <td style="padding-left:14px;color:var(--ink);font-weight:600">↳ ${esc(h.host)}</td>
@@ -10084,7 +10208,7 @@ function renderMatrixTable(data){
       <th style="width:40px;text-align:center">#</th>
       <th style="text-align:left;min-width:180px">โฮสต์ (${hosts.length})</th>
       <th style="text-align:left;min-width:90px">IP</th>
-      ${activeCVEs.map(c => `<th style="width:34px;text-align:center;cursor:pointer" onclick="filterByCVE('${c.cve}')" title="${esc(c.code)}: ${esc(c.cve)} (${esc(c.name)}) [${esc(c.sev)}] - คลิกเพื่อกรอง">${esc(c.code)}</th>`).join('')}
+      ${activeCVEs.map(c => `<th style="width:34px;text-align:center;cursor:pointer" onclick="filterByCVE('${jsq(c.cve)}')" title="${esc(c.code)}: ${esc(c.cve)} (${esc(c.name)}) [${esc(c.sev)}] - คลิกเพื่อกรอง">${esc(c.code)}</th>`).join('')}
     </tr>`;
   }
 
@@ -10113,23 +10237,23 @@ function renderMatrixTable(data){
         return `<td class="mxc mx-na">—</td>`;
       }
       if(f.bucket === 'vulnerable'){
-        return `<td class="mxc mx-v" title="${esc(h.host)}: ${esc(c.cve)} - ยืนยันแล้ว (เสี่ยง)" onclick="openDr('${esc(h.host).replace(/'/g,"\'")}');event.stopPropagation()">✕</td>`;
+        return `<td class="mxc mx-v" title="${esc(h.host)}: ${esc(c.cve)} - ยืนยันแล้ว (เสี่ยง)" onclick="openDr('${jsq(h.host)}');event.stopPropagation()">✕</td>`;
       }
       if(f.bucket === 'warning'){
-        return `<td class="mxc mx-w" title="${esc(h.host)}: ${esc(c.cve)} - อาจเสี่ยง (Warning)" onclick="openDr('${esc(h.host).replace(/'/g,"\'")}');event.stopPropagation()">!</td>`;
+        return `<td class="mxc mx-w" title="${esc(h.host)}: ${esc(c.cve)} - อาจเสี่ยง (Warning)" onclick="openDr('${jsq(h.host)}');event.stopPropagation()">!</td>`;
       }
       if(f.bucket === 'unknown'){
-        return `<td class="mxc mx-u" title="${esc(h.host)}: ${esc(c.cve)} - ยังไม่ทราบ" onclick="openDr('${esc(h.host).replace(/'/g,"\'")}');event.stopPropagation()">?</td>`;
+        return `<td class="mxc mx-u" title="${esc(h.host)}: ${esc(c.cve)} - ยังไม่ทราบ" onclick="openDr('${jsq(h.host)}');event.stopPropagation()">?</td>`;
       }
       if(f.bucket === 'safe'){
-        return `<td class="mxc mx-s" title="${esc(h.host)}: ${esc(c.cve)} - ปลอดภัย" onclick="openDr('${esc(h.host).replace(/'/g,"\'")}');event.stopPropagation()">✓</td>`;
+        return `<td class="mxc mx-s" title="${esc(h.host)}: ${esc(c.cve)} - ปลอดภัย" onclick="openDr('${jsq(h.host)}');event.stopPropagation()">✓</td>`;
       }
       return `<td class="mxc mx-na">—</td>`;
     }).join('');
 
     const ipCell = h.ip ? `<code style="font-size:10px;background:#f0f3fb;padding:1px 4px;border-radius:3px;color:#1d4ed8">${esc(h.ip)}</code>` : '<span style="color:#ccc">—</span>';
 
-    return `<tr onclick="openDr('${esc(h.host).replace(/'/g,"\'")}')" style="cursor:pointer">
+    return `<tr onclick="openDr('${jsq(h.host)}')" style="cursor:pointer">
       <td style="text-align:center;font-weight:700;color:var(--muted);font-size:11px;width:40px">${i+1}</td>
       <td class="mxh"><b>${esc(h.host)}</b></td>
       <td>${ipCell}</td>
@@ -10147,7 +10271,7 @@ function renderMatrixTable(data){
   if(legTb){
     legTb.innerHTML = activeCVEs.map((c, i) => {
       const matchCount = data.filteredFindings.filter(f => f.cve === c.cve && (F.bucket !== 'all' ? true : (f.bucket === 'vulnerable' || f.bucket === 'warning'))).length;
-      return `<tr onclick="filterByCVE('${c.cve}')" style="cursor:pointer" title="คลิกเพื่อกรองเฉพาะ CVE นี้">
+      return `<tr onclick="filterByCVE('${jsq(c.cve)}')" style="cursor:pointer" title="คลิกเพื่อกรองเฉพาะ CVE นี้">
         <td style="text-align:center;font-weight:700;color:var(--muted);font-size:11px;width:42px">${i+1}</td>
         <td><span class="tag" style="background:var(--ink);color:#fff">${esc(c.code)}</span></td>
         <td><b>${esc(c.cve)}</b></td>
@@ -10243,7 +10367,7 @@ function openDr(hostname, forceAll){
   if(data.isFiltered && rawH.findings && rawH.findings.length !== finds.length){
     html += `<div style="background:#eef2fb;border-bottom:1px solid #c5d2f6;padding:10px 16px;display:flex;justify-content:space-between;align-items:center;font-size:12px">
       <span style="color:var(--ink);font-weight:700">🔍 กำลังแสดงเฉพาะ ${finds.length} รายการที่ตรงกับตัวกรอง</span>
-      <button onclick="openDr('${esc(h.host).replace(/'/g,"\'")}', ${!forceAll})" style="background:#fff;border:1.5px solid var(--ink);color:var(--ink);padding:4px 10px;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer">
+      <button onclick="openDr('${jsq(h.host)}', ${!forceAll})" style="background:#fff;border:1.5px solid var(--ink);color:var(--ink);padding:4px 10px;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer">
         ${forceAll ? 'แสดงเฉพาะที่กรอง' : 'ดูทั้งหมด (' + rawH.findings.length + ' รายการ)'}
       </button>
     </div>`;
@@ -11228,7 +11352,7 @@ def ask_yn(prompt, default=False):
 def ask_int(prompt, default, min_v=None, max_v=None):
     def val(v):
         try: n = int(v)
-        except: return False, "ต้องเป็นตัวเลข"
+        except Exception: return False, "ต้องเป็นตัวเลข"
         if min_v is not None and n < min_v: return False, f"ต้อง >= {min_v}"
         if max_v is not None and n > max_v: return False, f"ต้อง <= {max_v}"
         return True, ""
@@ -11280,7 +11404,7 @@ def ask_choice(prompt, choices, default=None):
         try:
             n = int(v)
             if 1 <= n <= len(choices): return choices[n-1][0]
-        except: pass
+        except Exception: pass
         print(c("    ❌ ไม่ถูกต้อง", C.RED))
 
 

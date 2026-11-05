@@ -6,6 +6,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [6.5.2] — 2026-11-05
+
+Security hardening pass across the whole toolkit, from an internal defensive
+code review. Backward compatible: older scan JSON still loads and command-line
+usage is unchanged. All findings below were verified with regression tests.
+
+### Security
+- **Local GUI server CSRF / DNS-rebinding (High)** — the macOS GUI's local API
+  server (`server.py`, bound to 127.0.0.1) sent `Access-Control-Allow-Origin: *`
+  and did not validate the request origin, so a web page the operator visited
+  could start scans and read results cross-origin. It now rejects any request
+  whose `Host` is not loopback (defeats DNS-rebinding) or whose `Origin`/`Referer`
+  is not loopback, denies `OPTIONS`, and no longer emits wildcard CORS.
+- **CSV / Excel formula injection (High)** — report cells taken from scan data
+  (e.g. a server's `Server` header) that began with `= + - @` were written as
+  live formulas, so opening a report could run a formula on the analyst's
+  machine. Such cells are now prefixed with `'` so spreadsheet apps treat them as
+  text.
+- **PDF report crash / markup injection (High)** — attacker-controlled fields
+  reached reportlab `Paragraph` unescaped; a bare `<` in a `Server` header could
+  abort generation of the whole PDF (DoS), and well-formed tags could distort it.
+  All scan-derived fields are now routed through `_esc_pdf()`.
+- **TLS verification for third-party intel APIs (Medium-High)** — the TLS-tolerant
+  session (below) must apply only to scan targets. The subdomain-intel lookups
+  (crt.sh / hackertarget / alienvault / anubis / rapiddns) now use a strict
+  session that refuses invalid certificates, so a man-in-the-middle cannot forge
+  their responses to steer scan scope.
+- **Response size cap (Medium)** — responses are now streamed and capped at 5 MB
+  (decompressed), so a malicious host cannot exhaust memory with a huge body or a
+  gzip bomb.
+- **SSRF hardening (Medium)** — `is_private_host` now uses `ipaddress` and covers
+  link-local/cloud-metadata (169.254/16), IPv6, CGNAT and 0.0.0.0 instead of a
+  bypassable regex; sessions cap redirects at 5.
+- **Argument injection into nmap/ping (Medium)** — a hostname beginning with `-`
+  (e.g. from a host-list file or poisoned passive-DNS) could be read as a tool
+  option. `extract_domain` now rejects labels that start/end with `-`, and
+  `_probe_os` refuses such hosts before building the command.
+- **Dashboard onclick escaping (Medium)** — the host/CVE values embedded in
+  `onclick` JS-string handlers were not correctly escaped (a no-op replace). A
+  real JS-string escaper (`jsq`) is now used.
+- **Predictable temp font path (Low)** — embedded fonts are written to a per-user
+  `0700` temp directory instead of a world-writable, guessable path.
+
+### Fixed
+- **Hosts with untrusted TLS certificates no longer reported UNREACHABLE** — a
+  server presenting a self-signed, expired, name-mismatched, or unknown-CA
+  certificate caused `SSLError: certificate verify failed` during the pre-check /
+  fingerprint, and the host was dropped as `UNREACHABLE`. Scanning sessions are
+  now TLS-tolerant: on a certificate-verification failure the request is retried
+  without verification so the host is still scanned, and a `tls_insecure` flag is
+  set. Certificate problems are unchanged and continue to be detected and
+  reported separately (TLS probe / `cert_problem`). Genuine handshake failures
+  (with verification already off) are still reported as unreachable.
+- **Narrowed bare `except:` clauses** to `except Exception:` so real errors are
+  no longer silently swallowed.
+
 ## [6.5.1] — 2026-11-05
 
 Security and reporting fixes on top of 6.5.0. Backward compatible: older scan
@@ -238,7 +294,8 @@ old release stays usable via tag `v6.3.0`.
 - Per-host CVSS v3.1 risk index.
 - Interactive menu and scriptable CLI.
 
-[Unreleased]: https://github.com/CybersRMUTL/security-audit-toolkit/compare/v6.5.1...HEAD
+[Unreleased]: https://github.com/CybersRMUTL/security-audit-toolkit/compare/v6.5.2...HEAD
+[6.5.2]: https://github.com/CybersRMUTL/security-audit-toolkit/compare/v6.5.1...v6.5.2
 [6.5.1]: https://github.com/CybersRMUTL/security-audit-toolkit/compare/v6.5.0...v6.5.1
 [6.5.0]: https://github.com/CybersRMUTL/security-audit-toolkit/compare/v6.4.0...v6.5.0
 [6.4.0]: https://github.com/CybersRMUTL/security-audit-toolkit/compare/v6.3.0...v6.4.0
