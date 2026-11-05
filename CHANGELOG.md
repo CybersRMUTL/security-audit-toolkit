@@ -6,12 +6,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-Accuracy pass over the analysis engine after 6.5.0. These fixes are already
-bundled in the refreshed v6.5.0 download assets and will roll into the next
-tagged release. They correct cases where the scanner reported the wrong result,
-without changing how it is used.
+## [6.5.1] — 2026-11-05
+
+Security and reporting fixes on top of 6.5.0. Backward compatible: older scan
+JSON still loads and the command-line usage is unchanged.
+
+### Security
+- **Stored XSS in the HTML dashboard (High)** — fields taken from a scanned
+  server's response (e.g. the `Server` header) were embedded in the report's
+  `<script>` block without neutralising `</script>`. A malicious server could
+  make script of its choosing run in the browser of the operator who opened the
+  report. The embedded JSON now escapes `&`, `<`, `>`, U+2028 and U+2029 as
+  `\uXXXX` (still valid JSON, read identically by the page), and the scan-data
+  placeholder is substituted last so report data can never be mistaken for a
+  template token. Reported privately by Thana Tingprasom (Incognitolab).
 
 ### Fixed
+- **Port 80 and 443 reported as two hosts** — when both the HTTP and HTTPS ports
+  of the same host were open, discovery scanned `http://` and `https://`
+  separately and the host appeared twice in the report. The two are now
+  collapsed to a single HTTPS scan per host (non-standard ports are still
+  scanned individually).
+- **Thai font rendering on some machines** — the dashboard now loads Sarabun /
+  Noto Sans Thai as web fonts (with the previous system fonts kept as offline
+  fallback), so Thai text renders consistently on Windows/Linux machines without
+  a Thai font installed.
+
+### Fixed (accuracy pass, previously under Unreleased)
 - **Node.js 24.x false positive** — 24.0.x is no longer flagged "unpatched";
   all Node 24+ are treated as patched, matching the documented stance (the
   version-branch map previously required ≥ 24.1.0).
@@ -217,7 +238,8 @@ old release stays usable via tag `v6.3.0`.
 - Per-host CVSS v3.1 risk index.
 - Interactive menu and scriptable CLI.
 
-[Unreleased]: https://github.com/CybersRMUTL/security-audit-toolkit/compare/v6.5.0...HEAD
+[Unreleased]: https://github.com/CybersRMUTL/security-audit-toolkit/compare/v6.5.1...HEAD
+[6.5.1]: https://github.com/CybersRMUTL/security-audit-toolkit/compare/v6.5.0...v6.5.1
 [6.5.0]: https://github.com/CybersRMUTL/security-audit-toolkit/compare/v6.4.0...v6.5.0
 [6.4.0]: https://github.com/CybersRMUTL/security-audit-toolkit/compare/v6.3.0...v6.4.0
 [6.3.0]: https://github.com/CybersRMUTL/security-audit-toolkit/releases/tag/v6.3.0

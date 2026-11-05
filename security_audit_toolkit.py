@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-security_audit_toolkit.py — Security Audit Toolkit (RMUT CERT) v6.5
+security_audit_toolkit.py — Security Audit Toolkit (RMUT CERT) v6.5.1
 Scanner (14 CVEs) + RCE Verify (chain-of-custody) + Report Generator (PDF/CSV/Excel/HTML)
 + Cross-Menu Navigation + CVE Display + File Browser (GUI & Interactive CLI)
 
@@ -86,7 +86,7 @@ font_manager = None
 # SECTION 1 — Constants
 # ═══════════════════════════════════════════════════════════════════════
 
-VERSION = "6.5"
+VERSION = "6.5.1"
 _OWN_TARGET = False     # ตั้งเป็น True เมื่อใช้ --i-own-this-target
 _NO_INTERACTIVE = False # True เมื่อใช้ --no-interactive (headless / GUI mode)
 _SCAN_DEPTH = 2         # ความลึกการ crawl (--depth)
@@ -4593,6 +4593,10 @@ def _discover_alive(targets, opts):
     scan_targets, svc_count = [], 0
     for (t, ip) in alive_ips:
         ports = sorted(open_map.get(ip) or {443})  # โฮสต์ตอบสนองแต่ไล่พอร์ตไม่เจอ → สแกน https ปกติ
+        # พอร์ต 80 กับ 443 ของโฮสต์เดียวกันคือเว็บไซต์เดียวกัน (ปกติ 80 redirect ไป 443)
+        # ถ้าเปิดทั้งคู่ ให้สแกนเฉพาะ 443 (https) เพื่อไม่ให้รายงานแยกเป็น 2 โฮสต์
+        if 80 in ports and 443 in ports:
+            ports = [p for p in ports if p != 80]
         seen = set()
         for p in ports:
             url = _port_target(t[0], ip, p)
@@ -8932,6 +8936,13 @@ def _build_html_dashboard(data, path):
                            "thaicert": _thaicert_coverage(data),
                            "hosts": hosts_js, "findings": findings_js},
                           ensure_ascii=False)
+    # ป้องกัน stored XSS: ข้อมูลบางฟิลด์ (เช่น Server header ของเครื่องที่สแกน)
+    # อาจมี "</script>" ซึ่งทำให้เบราว์เซอร์ปิด <script> ก่อนเวลาและรันสคริปต์ของผู้โจมตีได้
+    # จึง escape อักขระที่ HTML parser ใช้มองหา tag ให้เป็น \uXXXX (ยังเป็น JSON ที่ถูกต้อง
+    # และ JS อ่านค่าได้เหมือนเดิมทุกประการ) ส่วน U+2028/U+2029 เป็น line terminator ใน JS
+    for _ch, _esc in (("&", "\\u0026"), ("<", "\\u003c"), (">", "\\u003e"),
+                      (" ", "\\u2028"), (" ", "\\u2029")):
+        payload = payload.replace(_ch, _esc)
 
     # เมทริกซ์ โฮสต์ × CVE แบบไดนามิกเต็มรูปแบบ (เรนเดอร์ใน JS ตามทุกตัวกรอง)
     matrix_html = (
@@ -8964,11 +8975,16 @@ def _build_html_dashboard(data, path):
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>RMUT CERT — แดชบอร์ดช่องโหว่</title>
 <link rel="icon" type="image/png" href="data:image/png;base64,__FAVICON__">
+<!-- ฟอนต์ไทยแบบเว็บฟอนต์ (โหลดเมื่อมีเน็ต) เพื่อให้แสดงผลเหมือนกันทุกเครื่อง
+     โดยเฉพาะ Windows/Linux ที่ไม่มีฟอนต์ไทยติดตั้ง; ถ้าออฟไลน์จะ fallback ไปฟอนต์ในเครื่อง -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;700;800&family=Noto+Sans+Thai:wght@400;500;700;800&display=swap">
 <style>
 :root{--ink:#1a237e;--ink2:#283593;--vuln:#c0392b;--warn:#d35400;--unk:#6b7280;--safe:#1e7e34;
   --line:#dde1ed;--bg:#f4f6fb;--card:#fff;--muted:#6b7280;--dr-w:620px}
 *{box-sizing:border-box}
-body{font-family:-apple-system,"Segoe UI","Sarabun","Loma",Tahoma,sans-serif;margin:0;background:var(--bg);color:#1a1c24}
+body{font-family:"Sarabun","Noto Sans Thai",-apple-system,"Segoe UI","Loma",Tahoma,sans-serif;margin:0;background:var(--bg);color:#1a1c24}
 .wrap{max-width:1160px;margin:0 auto;padding:22px 16px 60px}
 h1{color:var(--ink);font-size:22px;margin:0 0 2px}
 .sub{color:var(--muted);font-size:13px;margin:0 0 16px}
@@ -11003,11 +11019,13 @@ function tc8Open(no, idx){
 
 init();
 </script></body></html>"""
+    # แทน __PAYLOAD__ เป็นลำดับสุดท้าย เพื่อไม่ให้ข้อมูลสแกน (ซึ่งควบคุมไม่ได้)
+    # ถูกค้นหา placeholder อื่น ๆ (เช่น __MATRIX__/__VC__) โดยไม่ตั้งใจ
     out = (tmpl.replace("__CHARTJS__", _CHARTJS_SRC)
                .replace("__FAVICON__", _FAVICON_B64)
-               .replace("__PAYLOAD__", payload)
                .replace("__MATRIX__", matrix_html)
-               .replace("__VC__", vc))
+               .replace("__VC__", vc)
+               .replace("__PAYLOAD__", payload))
     with open(path, "w", encoding="utf-8") as f:
         f.write(out)
 
