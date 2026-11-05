@@ -55,8 +55,8 @@
 
 | ระบบปฏิบัติการ | ดาวน์โหลด | ความต้องการขั้นต่ำ |
 |----------------|-----------|---------------------|
-| 🍎 **macOS** (Apple Silicon) | **[⬇️ SecurityAuditToolkit-v6.5.1-macOS.zip](https://github.com/CybersRMUTL/security-audit-toolkit/releases/download/v6.5.1/SecurityAuditToolkit-v6.5.1-macOS.zip)** | ชิป Apple M1/M2/M3/M4 · macOS 13 (Ventura) ขึ้นไป |
-| 🪟 **Windows** | **[⬇️ SecurityAuditToolkit-v6.5.1-Windows.zip](https://github.com/CybersRMUTL/security-audit-toolkit/releases/download/v6.5.1/SecurityAuditToolkit-v6.5.1-Windows.zip)** | Windows 10 / 11 (64-bit) |
+| 🍎 **macOS** (Apple Silicon) | **[⬇️ SecurityAuditToolkit-v6.5.2-macOS.zip](https://github.com/CybersRMUTL/security-audit-toolkit/releases/download/v6.5.2/SecurityAuditToolkit-v6.5.2-macOS.zip)** | ชิป Apple M1/M2/M3/M4 · macOS 13 (Ventura) ขึ้นไป |
+| 🪟 **Windows** | **[⬇️ SecurityAuditToolkit-v6.5.2-Windows.zip](https://github.com/CybersRMUTL/security-audit-toolkit/releases/download/v6.5.2/SecurityAuditToolkit-v6.5.2-Windows.zip)** | Windows 10 / 11 (64-bit) |
 | 🐧 **Linux / ทุกระบบ (CLI)** | **[💻 โค้ด CLI — `git clone`](#-ติดตั้งจากซอร์สโค้ด-python)** | Python 3.9+ (รันได้ทุก OS รวม Linux) |
 
 📦 ดูไฟล์ทั้งหมดและเวอร์ชันก่อนหน้าได้ที่ **[หน้า Releases](https://github.com/CybersRMUTL/security-audit-toolkit/releases)**
@@ -76,7 +76,7 @@
 เปิดแอป **Terminal** (`Cmd + Space` พิมพ์ `Terminal`) แล้ววางคำสั่งนี้ กด **Enter**:
 
 ```bash
-xattr -cr ~/Downloads/Security-Audit-Toolkit-v6.5.1 && open ~/Downloads/Security-Audit-Toolkit-v6.5.1
+xattr -cr ~/Downloads/Security-Audit-Toolkit-v6.5.2 && open ~/Downloads/Security-Audit-Toolkit-v6.5.2
 ```
 
 > เปลี่ยน path ให้ตรงกับที่แตกไฟล์ไว้ — หรือพิมพ์ `xattr -cr ` (เว้นวรรค 1 เคาะ) แล้ว **ลากโฟลเดอร์ที่แตก zip มาวางใน Terminal** มันจะเติม path ให้เอง
