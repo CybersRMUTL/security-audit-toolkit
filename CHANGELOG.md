@@ -6,6 +6,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [6.5.3] — 2026-11-07
+
+Fix for automatic LAN-mode detection. Backward compatible: older scan JSON still
+loads and the command-line usage is unchanged.
+
+### Fixed
+- **Auto scan mode now engages LAN mode for internal subnets during host
+  discovery** — when scanning a private range (e.g. `192.168.1.0/24`) in `auto`
+  mode, the deep OS/MAC probe already switched to LAN per host, but host
+  discovery and the report's scan-mode label still used the external port list
+  and timing. Host discovery now treats a target set as LAN when every target is
+  a private IP (new `_targets_lan_mode()` helper), using the LAN port list and
+  faster per-port timeout, and prints a `🏠 auto → LAN` notice so the switch is
+  visible. Mixed/public target sets keep external timing (so a 0.6s probe is not
+  applied to internet hosts); hostname targets are still auto-detected per host
+  in the deep scan.
+- **Report scan-mode label reflects the effective mode** — in `auto` mode the PDF
+  report now shows `อัตโนมัติ (auto) → ใช้ LAN` or `→ ใช้ External` based on
+  whether any reachable host actually ran in LAN mode.
+
 ## [6.5.2] — 2026-11-05
 
 Security hardening pass across the whole toolkit, from an internal defensive
@@ -294,7 +314,8 @@ old release stays usable via tag `v6.3.0`.
 - Per-host CVSS v3.1 risk index.
 - Interactive menu and scriptable CLI.
 
-[Unreleased]: https://github.com/CybersRMUTL/security-audit-toolkit/compare/v6.5.2...HEAD
+[Unreleased]: https://github.com/CybersRMUTL/security-audit-toolkit/compare/v6.5.3...HEAD
+[6.5.3]: https://github.com/CybersRMUTL/security-audit-toolkit/compare/v6.5.2...v6.5.3
 [6.5.2]: https://github.com/CybersRMUTL/security-audit-toolkit/compare/v6.5.1...v6.5.2
 [6.5.1]: https://github.com/CybersRMUTL/security-audit-toolkit/compare/v6.5.0...v6.5.1
 [6.5.0]: https://github.com/CybersRMUTL/security-audit-toolkit/compare/v6.4.0...v6.5.0

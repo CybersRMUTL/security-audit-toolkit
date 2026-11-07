@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-security_audit_toolkit.py — Security Audit Toolkit (RMUT CERT) v6.5.2
+security_audit_toolkit.py — Security Audit Toolkit (RMUT CERT) v6.5.3
 Scanner (14 CVEs) + RCE Verify (chain-of-custody) + Report Generator (PDF/CSV/Excel/HTML)
 + Cross-Menu Navigation + CVE Display + File Browser (GUI & Interactive CLI)
 
@@ -86,7 +86,7 @@ font_manager = None
 # SECTION 1 — Constants
 # ═══════════════════════════════════════════════════════════════════════
 
-VERSION = "6.5.2"
+VERSION = "6.5.3"
 _OWN_TARGET = False     # ตั้งเป็น True เมื่อใช้ --i-own-this-target
 _NO_INTERACTIVE = False # True เมื่อใช้ --no-interactive (headless / GUI mode)
 _SCAN_DEPTH = 2         # ความลึกการ crawl (--depth)
@@ -4634,15 +4634,33 @@ def _port_target(base_target, ip_or_host, port):
     return f"https://{host}:{port}"
 
 
+def _targets_lan_mode(targets, opts):
+    """ตัดสินใจว่าควรใช้โหมด LAN กับ 'ชุดเป้าหมาย' นี้ไหม (ใช้ตอน host discovery)
+      • lan / external  → ตามที่ผู้ใช้บังคับ
+      • auto            → เปิด LAN เมื่อ 'ทุกเป้าหมาย' เป็น IP ส่วนตัว (เช่น CIDR วงใน)
+    เช็กจาก IP literal โดยไม่ resolve DNS (เร็ว) — เป้าหมายที่เป็นชื่อโฮสต์ยังตรวจ LAN
+    ต่อโฮสต์ในขั้นสแกนเชิงลึกอยู่แล้ว จึงไม่บังคับ LAN timing ให้ทั้งชุด (กัน 0.6s สั้นไปกับโฮสต์ public)"""
+    sm = opts.get("scan_mode", "auto")
+    if sm == "lan" or opts.get("lan_mode"):
+        return True
+    if sm == "external":
+        return False
+    hosts = [t[0].replace("https://", "").replace("http://", "").split("/")[0].split(":")[0]
+             for t in targets]
+    return bool(hosts) and all(_is_private_ip(h) is True for h in hosts)
+
+
 def _discover_alive(targets, opts):
     """Host discovery 2 เฟส:
       เฟส 1 — ค้นหาโฮสต์ที่ตอบสนอง (เจอพอร์ตเว็บเปิดพอร์ตแรกก็พอ) ข้ามไอพีตายเร็ว ไม่รอ HTTP timeout 8s
       เฟส 2 — บนโฮสต์ที่ตอบสนอง 'ไล่หาพอร์ตเว็บให้ครบ' แล้วสแกนทุกพอร์ตที่เปิด (เจอเว็บบนพอร์ตแปลก ๆ ด้วย)
     ใช้ TCP connect ล้วน (ไม่พึ่ง ICMP → ปิดปิงก็ใช้ได้)
     คืน (scan_targets, dead_results); dead บันทึกเป็น 'เข้าไม่ถึง' เพื่อให้ยอดรวมในรายงานตรง"""
-    lan = opts.get("scan_mode") == "lan"
+    lan = _targets_lan_mode(targets, opts)
     enum_ports = _WEB_PORTS_LAN if lan else _WEB_PORTS
     dt = 0.6 if lan else 1.0
+    if lan and opts.get("scan_mode", "auto") == "auto":
+        print("  🏠 auto → เปิดโหมด LAN (เป้าหมายทั้งหมดเป็น IP ภายใน) — ใช้พอร์ต/จังหวะแบบ LAN")
     total = len(targets)
     workers = min(128, max(8, total))
     print(f"  🔎 Host discovery (TCP · ไม่พึ่งปิง) บน {total} เป้าหมาย ด้วย {workers} threads · "
@@ -8239,8 +8257,12 @@ def _build_pdf(data, charts, output_path, font):
                ["ระยะเวลาสแกน", (f"{int(meta['duration'])} วินาที" if meta.get("duration") else "ไม่ได้บันทึก")]]
     o = meta.get("opts") or {}
     if o:
+        _sm_key = o.get("scan_mode", "auto")
         _smode = {"lan": "LAN (เครือข่ายภายใน)", "external": "ภายนอก (External)",
-                  "auto": "อัตโนมัติ (auto)"}.get(o.get("scan_mode", "auto"), "อัตโนมัติ (auto)")
+                  "auto": "อัตโนมัติ (auto)"}.get(_sm_key, "อัตโนมัติ (auto)")
+        if _sm_key == "auto":
+            _any_lan = any(h.get("lan") for h in data.get("hosts", []) if h.get("reachable"))
+            _smode += " → ใช้ LAN (พบ IP ภายใน)" if _any_lan else " → ใช้ External"
         sm_rows.append(["โหมดสแกน", _smode])
         sm_rows.append(["พารามิเตอร์", f"threads={o.get('target_threads','-')} · depth={o.get('depth','-')} "
                         f"· max_pages={o.get('max_pages','-')} · timeout={o.get('timeout','-')}s "
